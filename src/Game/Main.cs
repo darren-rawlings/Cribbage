@@ -1,277 +1,296 @@
-using GameTemplate.Core;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using Cribbage.Core;
 using Godot;
-using Renegade.Ads;
-using Renegade.Audio;
+using Renegade.Cards;
 using Renegade.Core;
-using Renegade.Dev;
-using Renegade.Looks;
 using Renegade.Play;
 using Renegade.Ui;
 
-namespace GameTemplate.Game;
+namespace Cribbage.Game;
 
 /// <summary>
-/// Starting point for a new game, built the way every Renegade game is: the shared stage (lights,
-/// reflection sky, table), a board on a rig that spins with a drag, the shared HUD (modes,
-/// difficulty, Style menu, Undo (ad), Start over, Settings with sound and freeze, a video
-/// tutorial behind Demo), material sounds, ads every 5th game, the winner's fire and the flight
-/// recorder. The placeholder game: tap the board to knock it, five knocks finish a game.
-/// Replace the board, the rules (src/Core), the tap, the tutorial pages and the clips with the
-/// real game. Tutorial clips: give each a case in PlayClip, then run
-/// addons/renegade_core/tools/Record-Clips.ps1 with their names.
+/// Cribbage against Rosie, a game to 121 on a wooden board with pegs. Tap two cards and press
+/// "To the crib"; then in the play, tap a card to lay it (the count is shown; cards that would
+/// pass 31 are greyed). At the show, each hand is counted aloud and pegged.
 /// </summary>
-public partial class Main : Node3D
+public partial class Main : CardGame
 {
-	public const string Title = "Game Template";
+	private readonly Dictionary<Card, Card3D> _nodes = new();
+	private CribbageGame _game = new();
+	private CribbageHand? _hand;
+	private CribbageAi _ai = null!;
+	private Board _board = null!;
+	private Button _crib = null!;
+	private readonly int[] _laid = new int[2];
+	private readonly List<Card3D> _turned = new();
 
-	/// <summary>Google's test ad units until the real ones exist in AdMob (see the release playbook).</summary>
-	private static readonly AdMobConfig AdUnits = AdMobConfig.Test;
+	protected override string Title => "Cribbage";
+	protected override string Hint => "Pick two for the crib, then play";
+	protected override string NewGameText => _game.IsOver ? "New game" : "Next hand";
+	protected override IReadOnlyList<TutorialPage> TutorialPages => Tutorial.Pages;
+	protected override bool InProgress => !_game.IsOver && (_game.Hands > 0 || _hand is { Phase: not CribPhase.Over });
 
-	private const float Thickness = 0.4f;
+	private Vector3 StockAt => Table.Centre + new Vector3(-1.45f, 0, -0.05f);
+	private Vector3 CribAt => Table.Centre + new Vector3(1.45f, 0, -0.05f);
 
-	private readonly ImpactBank<Style> _impacts = new(Styles.Impact);
-	private readonly Scoreboard _wins = new();
+	protected override void LevelChanged(Difficulty difficulty) => _ai = new CribbageAi(1, difficulty, Random);
 
-	private GameSettings _settings = null!;
-	private Counter _game = new(5);
-	private Node3D _rig = null!;
-	private Camera3D _camera = null!;
-	private MeshInstance3D _board = null!;
-	private SoundPool _sound = null!;
-	private GameHud _hud = null!;
-	private IAdService _ads = null!;
-	private AdSchedule? _adSchedule;
-	private SpinControl _spin = null!;
-	private Flames? _fire;
-
-	private bool _demo;
-	private bool _quitAfterDemo;
-	private string? _clip;
-	private float _demoTimer;
-
-	public override void _Ready()
+	protected override void AddSettings()
 	{
-		DevLog.Tag = "gt";
-		AudioWatch.Attach(this, Title);
-		_settings = GameSettings.Load();
-		ReadDeveloperArgs();
-		AudioServer.SetBusMute(0, _settings.Muted);
-
-		_camera = new Camera3D { Position = new Vector3(0, 10f, 6.5f), Fov = 52, KeepAspect = Camera3D.KeepAspectEnum.Width };
-		AddChild(_camera);
-		_camera.LookAt(new Vector3(0, -0.4f, 0.3f));
-		Stage.Build(this, -Thickness, new Color("1a0f09"));
-		_rig = new Node3D();
-		AddChild(_rig);
-		_board = new MeshInstance3D
+		_board = new Board { Position = new Vector3(0, CardTable.FeltY, -1.45f) };
+		AddChild(_board);
+		_crib = Hud.AddButton("To the crib", true, Control.LayoutPreset.CenterBottom, -170, 170, -192, -128, 28);
+		_crib.Visible = false;
+		_crib.Pressed += () =>
 		{
-			Mesh = new BoxMesh { Size = new Vector3(7, Thickness, 7) },
-			Position = new Vector3(0, -Thickness / 2, 0),
-			MaterialOverride = Materials.For(Styles.BoardLook(_settings.Board)),
+			if (!Busy && _hand is { Phase: CribPhase.Discard } && Fans[0].RaisedCards.Count == 2)
+				Run(Discard(Fans[0].RaisedCards.Select(n => n.Card).ToList()));
 		};
-		_rig.AddChild(_board);
-		Stage.WarmUp(this, -Thickness, Sparkle.Halo);
+	}
 
-		_sound = new SoundPool();
-		AddChild(_sound);
-		_adSchedule ??= new AdSchedule(_settings.GamesSinceAd);
-		var theme = HudTheme.Warm;
-		_ads = AdServices.Create(this, AdUnits, _demo, new PlaceholderAds { TextColor = theme.Text });
-
-		_hud = new GameHud(theme);
-		AddChild(_hud);
-		// The HUD saves Sound and Freeze the board itself; add a game's own Settings rows with
-		// _hud.AddToggle and _hud.AddChoice (keep their values in _settings.Extra).
-		_hud.Build(new HudOptions(Title, "Tap the board  ·  Drag sideways to spin"), _settings);
-		_hud.NewGamePressed += OnNewGamePressed;
-		_hud.RestartPressed += OnRestartPressed;
-		_hud.SetTutorial(Tutorial.Pages);
-		_hud.ModeChosen += (mode, difficulty) =>
+	protected override async Task NewRound()
+	{
+		int round = Round;
+		_crib.Visible = false;
+		if (_game.IsOver)
 		{
-			_settings.Mode = mode;
-			_settings.Difficulty = difficulty;
-			_settings.Save();
-		};
-		_hud.BoardChosen += style =>
+			_game = new CribbageGame();
+			_board.Reset();
+		}
+		_ai = new CribbageAi(1, Settings.Difficulty, new Random(Random.Next()));
+		_nodes.Clear();
+		_turned.Clear();
+		Array.Clear(_laid);
+		_hand = null;
+		SetScore();
+		var order = Deck.Shuffled(Random);
+		var nodes = await ShuffleOnTable(order);
+		if (round != Round)
+			return;
+		for (int i = 0; i < order.Count; i++)
+			_nodes[order[i]] = nodes[i];
+		var hand = _game.Deal(order);
+		_hand = hand;
+		await DealRound(nodes.Take(12).ToList(), Enumerable.Range(0, 12).Select(i => (hand.Pone + i) % 2).ToList(), spacing: 0.12f);
+		if (round != Round)
+			return;
+		// The rest becomes the stock, off to one side.
+		var stock = nodes.Skip(12).ToList();
+		Tween? last = null;
+		for (int i = 0; i < stock.Count; i++)
+			last = CardMotion.Slide(stock[i], Dealer.InStack(StockAt, stock.Count - 1 - i), 0.25f);
+		await Await(last);
+		await PickUpAll(p => hand.Hand(p).Select(c => _nodes[c]));
+		Hud.SetRestartVisible(true);
+		if (Demo)
 		{
-			_settings.Board = style;
-			_settings.Save();
-			_board.MaterialOverride = Materials.For(Styles.BoardLook(style));
-		};
-		_hud.PiecesChosen += style =>
-		{
-			_settings.Pieces = style;
-			_settings.Save();
-		};
-
-		_spin = new SpinControl(_rig, () => !_settings.FreezeBoard);
-		// Freeze the board also turns it back to where it started.
-		_spin.Frozen = () => _settings.FreezeBoard;
-		_spin.Tapped += OnTapped;
-		RefreshUi();
-		if (_clip != null)
-		{
-			_hud.Visible = false;
-			_ = PlayClip(_clip);
+			await Discard(new CribbageAi(0, Difficulty.Medium, Random).ChooseDiscard(hand));
 			return;
 		}
-		if (!_demo)
-			_hud.OfferTutorialOnce(_settings);
-		_hud.ApplyDevFlags();
+		Busy = false;
+		_crib.Visible = true;
+		_crib.Disabled = true;
+		Hud.SetStatus($"Choose two cards for {(hand.Dealer == 0 ? "your" : "Rosie's")} crib: tap them.", Bright);
 	}
 
-	public override void _UnhandledInput(InputEvent @event)
+	private async Task Discard(IReadOnlyList<Card> mine)
 	{
-		if (!_hud.MenuOpen)
-			_spin.HandleInput(@event);
-	}
-
-	/// <summary>A tap on the board: a knock in the board's material, sparks on the last one.</summary>
-	private void OnTapped(Vector2 screen)
-	{
-		if (_game.IsDone)
-			return;
-		var from = _camera.ProjectRayOrigin(screen);
-		var direction = _camera.ProjectRayNormal(screen);
-		if (direction.Y > -0.01f)
-			return;
-		var hit = from + direction * (-from.Y / direction.Y);
-		var local = _rig.ToLocal(hit);
-		if (Mathf.Abs(local.X) > 3.5f || Mathf.Abs(local.Z) > 3.5f)
-			return;
-		_hud.HideHint();
-		_game.Tap();
-		_sound.PlayImpact(_impacts.Random(_settings.Board), hit, 1f, Styles.GainDb(_settings.Board));
-		if (_game.IsDone)
+		var hand = _hand!;
+		Busy = true;
+		_crib.Visible = false;
+		Fans[0].LowerAll();
+		var theirs = _ai.ChooseDiscard(hand);
+		hand.Discard(0, mine);
+		var heels = hand.Discard(1, theirs, Random.Next(hand.Stock.Count - 4) + 2);
+		// Both slide two cards face down onto the crib.
+		var moves = new List<Task>();
+		int k = 0;
+		foreach (var (p, cards) in new[] { (0, mine), (1, (IReadOnlyList<Card>)theirs) })
 		{
-			_wins.Win(first: true);
-			Sparkle.Burst(_rig, local + new Vector3(0, 0.3f, 0));
-			// The winner's fire: in a real game, set the winning pieces alight.
-			_fire = Flames.SetAlight(_rig, local, new[] { _board }, radius: 0.6f, size: 1.4f, withLight: true);
+			var nodes = cards.Select(c => _nodes[c]).ToList();
+			foreach (var node in nodes)
+				Fans[p].Remove(node);
+			Fans[p].Settle();
+			var targets = nodes.Select(_ => Dealer.InStack(CribAt, k++, yaw: 0.1f * k)).ToList();
+			moves.Add(Hands[p].Carry(nodes, targets, seconds: 0.4f, lift: 0.25f));
 		}
-		RefreshUi();
+		await Task.WhenAll(moves);
+		// The cut: the starter is turned face up on the stock.
+		var starter = _nodes[hand.Starter!.Value];
+		Hud.SetStatus(hand.Pone == 0 ? "You cut; Rosie turns the starter." : "Rosie cuts; you turn the starter.", Muted);
+		await Await(CardMotion.Fly(starter, FaceUpAt(StockAt + new Vector3(0, 0.25f, 0), 0.15f), 0.45f, lift: 0.3f, landed: () => Sounds.PlaySlap(StockAt)));
+		await Pegs(heels);
+		await NextPlay();
 	}
 
-	private void OnNewGamePressed()
+	/// <summary>Moves the pegs for whatever was scored, and says it.</summary>
+	private async Task Pegs(IEnumerable<Pegged> scored)
 	{
-		bool adDue = _adSchedule!.GameFinished();
-		_settings.GamesSinceAd = _adSchedule.GamesSinceAd;
-		_settings.Save();
-		if (adDue)
+		foreach (var peg in scored)
 		{
-			DevLog.Write("ad: between-games interstitial");
-			_ads.ShowInterstitial(StartGame);
+			string who = peg.Player == 0 ? "You" : "Rosie";
+			Say(peg.Player == 1 ? 1 : 0, $"{peg.Why} for {peg.Points}");
+			Hud.SetStatus($"{who}: {peg.Why.ToLowerInvariant()} for {peg.Points}.", Bright);
+			await Await(_board.Peg(peg.Player, _hand!.ScoreOf(peg.Player)));
+			SetScore();
+			await Pause(0.4f);
 		}
-		else
-		{
-			StartGame();
-		}
+		SayNone();
 	}
 
-	private void StartGame()
+	private async Task NextPlay()
 	{
-		_fire?.Extinguish();
-		_fire = null;
-		_board.MaterialOverlay = null;
-		_game = new Counter(5);
-		RefreshUi();
-	}
-
-	/// <summary>
-	/// Start over mid-game. Against the computer it counts as resigning (a loss) unless the player
-	/// watches an ad; between two players it just asks first.
-	/// </summary>
-	private void OnRestartPressed()
-	{
-		if (_game.IsDone || _game.Count == 0)
+		var hand = _hand!;
+		int round = Round;
+		SetScore();
+		if (hand.Phase == CribPhase.Over)
 		{
-			StartGame();
+			EndHand();
 			return;
 		}
-		_hud.AskRestart(_settings.Mode == GameMode.PlayerVsComputer && !_demo, countLoss =>
+		if (hand.Phase == CribPhase.Show)
 		{
-			if (countLoss)
-				_wins.Win(first: false);
-			StartGame();
-		}, then => _ads.ShowRewarded(rewarded: then, closed: () => { }));
+			await Show();
+			return;
+		}
+		int p = hand.Current;
+		if (p == 0 && !Demo)
+		{
+			DimUnplayable(hand.Playable());
+			Busy = false;
+			Hud.SetStatus($"The count is {hand.Count}. Your card.", Bright);
+			return;
+		}
+		Busy = true;
+		await Pause(0.7f);
+		if (round != Round)
+			return;
+		var ai = p == 1 ? _ai : new CribbageAi(0, Difficulty.Medium, Random);
+		await Lay(p, ai.ChoosePlay(hand));
 	}
 
-	/// <summary>
-	/// Plays one scripted scene for the tutorial (with --clip=name), then quits; the HUD is hidden
-	/// so the clip shows only the board. Record them with addons/renegade_core/tools/Record-Clips.ps1.
-	/// </summary>
-	private async System.Threading.Tasks.Task PlayClip(string clip)
+	private async Task Lay(int p, Card card)
 	{
-		_settings.Muted = false;
-		await ToSignal(GetTree().CreateTimer(0.8), SceneTreeTimer.SignalName.Timeout);
-		switch (clip)
+		var hand = _hand!;
+		Busy = true;
+		DimUnplayable(null);
+		int before = hand.Sequence.Count;
+		var scored = hand.Play(card);
+		var node = _nodes[card];
+		// Each player lays their cards in a row in front of them.
+		var at = new Vector3(-0.85f + _laid[p] * 0.24f, CardTable.FeltY + 0.002f * _laid[p], p == 0 ? 0.25f : -0.85f);
+		_laid[p]++;
+		await PlayToTable(p, node, FaceUpAt(at, ((float)Random.NextDouble() - 0.5f) * 0.1f));
+		_turned.Add(node);
+		Hud.SetStatus($"{(p == 0 ? "You" : "Rosie")}: {Card.RankName(card.Rank).ToLowerInvariant()}, {(hand.Sequence.Count == 0 ? "31" : hand.Count.ToString())}.", Muted);
+		await Pegs(scored);
+		// "Go": the other player couldn't play.
+		if (hand.Phase == CribPhase.Pegging && hand.SaidGo(1 - p))
 		{
-			default:
-				for (int i = 0; i < 5; i++)
-				{
-					OnTapped(GetViewport().GetVisibleRect().Size / 2);
-					await ToSignal(GetTree().CreateTimer(0.6), SceneTreeTimer.SignalName.Timeout);
-				}
+			Say(1 - p == 1 ? 1 : 0, "Go");
+			await Pause(0.6f);
+			SayNone();
+		}
+		// The count went back to zero: the cards played so far are turned face down.
+		if (hand.Sequence.Count == 0 && hand.Phase != CribPhase.Over)
+		{
+			await Pause(0.4f);
+			foreach (var turned in _turned)
+				CardMotion.Slide(turned, FaceDownAt(turned.GlobalPosition, 0.05f), 0.2f);
+			_turned.Clear();
+			Hud.SetStatus("The count starts again from zero.", Muted);
+			await Pause(0.4f);
+		}
+		await NextPlay();
+	}
+
+	private async Task Show()
+	{
+		var hand = _hand!;
+		var starter = hand.Starter!.Value;
+		var shows = hand.Show();
+		foreach (var (player, what, items, points) in shows)
+		{
+			// Turn the cards being counted face up, together, in front of their player.
+			var cards = what == "crib" ? hand.Crib : hand.Kept(player);
+			float z = what == "crib" ? -0.3f : player == 0 ? 0.25f : -0.85f;
+			for (int i = 0; i < cards.Count; i++)
+				CardMotion.Fly(_nodes[cards[i]], FaceUpAt(new Vector3(-0.85f + i * 0.24f, CardTable.FeltY + 0.01f + 0.002f * i, z)), 0.35f, lift: 0.2f);
+			await Pause(0.6f);
+			string whose = player == 0 ? (what == "crib" ? "Your crib" : "Your hand") : (what == "crib" ? "Rosie's crib" : "Rosie's hand");
+			// Counted aloud a phrase at a time, the way players say it.
+			var phrases = Score.Phrases(items);
+			if (phrases.Count == 0)
+				Hud.SetStatus($"{whose}: nineteen (nothing).", Bright);
+			for (int i = 0; i < phrases.Count; i++)
+			{
+				var shown = phrases.Skip(Math.Max(0, i - 1)).Take(Math.Min(2, i + 1));
+				Hud.SetStatus($"{whose}: {string.Join(", ", shown)}", Bright);
+				await Pause(0.55f);
+			}
+			if (phrases.Count > 0)
+				Hud.SetStatus($"{whose}: {points}.", Bright);
+			Say(player == 1 ? 1 : 0, points == 0 ? "Nineteen!" : $"{points}");
+			await Await(_board.Peg(player, hand.ScoreOf(player)));
+			SetScore();
+			await Pause(2.2f);
+			SayNone();
+			if (hand.GameWon)
 				break;
 		}
-		await ToSignal(GetTree().CreateTimer(2.0), SceneTreeTimer.SignalName.Timeout);
-		GetTree().Quit();
+		EndHand();
 	}
 
-	private void RefreshUi()
+	private void EndHand()
 	{
-		_hud.SetScore($"Games {_wins.First}");
-		_hud.SetNewGameVisible(_game.IsDone);
-		_hud.SetRestartVisible(!_game.IsDone);
-		_hud.SetStatus(_game.IsDone ? "Done!" : $"Knock {_game.Count} of {_game.Target}", new Color("fff3e0"));
-		if (_game.IsDone && _demo && _quitAfterDemo && _wins.First >= 5)
-			GetTree().Quit();
-	}
-
-	public override void _Process(double delta)
-	{
-		float dt = (float)delta;
-		_spin.Process(dt);
-		if (!_demo)
-			return;
-		_demoTimer += dt;
-		if (_demoTimer < 0.3f)
-			return;
-		_demoTimer = 0f;
-		if (_game.IsDone)
-			OnNewGamePressed();
-		else
-			OnTapped(GetViewport().GetVisibleRect().Size / 2);
-	}
-
-	/// <summary>
-	/// Developer flags after `--` (or in user://dev_args.txt on a phone): `--log`, `--demo`,
-	/// `--quit-after-demo`, `--games-since-ad=4`, `--clip=knock` (plays a tutorial clip and quits),
-	/// plus the HUD's `--tutorial=N` and `--settings`. Add the game's own flags here.
-	/// </summary>
-	private void ReadDeveloperArgs()
-	{
-		foreach (var (name, value) in DevArgs.Read())
+		var hand = _hand!;
+		_game.Finished();
+		SetScore();
+		if (_game.IsOver)
 		{
-			switch (name)
-			{
-				case "--log":
-					DevLog.Enabled = true;
-					break;
-				case "--demo":
-					_demo = true;
-					_settings.Muted = false;
-					break;
-				case "--quit-after-demo":
-					_quitAfterDemo = true;
-					break;
-				case "--games-since-ad":
-					_adSchedule = new AdSchedule(int.Parse(value));
-					break;
-				case "--clip":
-					_clip = value;
-					break;
-			}
+			int w = _game.Winner;
+			Sparkle.Burst(this, _board.ToGlobal(Board.Hole(w, 121)) + Vector3.Up * 0.2f);
+			string skunk = _game.Skunk ? " A skunk!" : "";
+			Finish(w == 0 ? $"You peg out and win, 121 to {_game.Scores[1]}!{skunk}" : $"Rosie pegs out and wins, 121 to {_game.Scores[0]}.{skunk}",
+				w, _game.Skunk ? hand.Kept(w).Select(c => _nodes[c]) : null);
 		}
+		else
+		{
+			Finish($"You {_game.Scores[0]}, Rosie {_game.Scores[1]}. {(hand.Dealer == 0 ? "Rosie" : "You")} deal{(hand.Dealer == 0 ? "s" : "")} next.", -1);
+		}
+	}
+
+	private void SetScore()
+	{
+		var scores = _hand != null ? new[] { _hand.ScoreOf(0), _hand.ScoreOf(1) } : _game.Scores;
+		Hud.SetScore($"To 121: you {scores[0]} · {scores[1]} Rosie   ·   Wins {Wins.First}–{Wins.Second}");
+	}
+
+	protected override void Tapped(Vector3 origin, Vector3 direction, Vector2 screen)
+	{
+		if (_hand is not { } hand || Fans[0].At(origin, direction) is not { } card)
+			return;
+		if (hand.Phase == CribPhase.Discard)
+		{
+			bool raise = !Fans[0].IsRaised(card);
+			if (raise && Fans[0].RaisedCards.Count >= 2)
+				return;
+			Fans[0].RaiseCard(card, raise);
+			Fans[0].Settle(0.12f);
+			_crib.Disabled = Fans[0].RaisedCards.Count != 2;
+			return;
+		}
+		if (hand.Phase != CribPhase.Pegging || hand.Current != 0)
+			return;
+		if (!hand.Playable().Contains(card.Card))
+		{
+			Hud.SetStatus($"That would take the count past 31 (it's {hand.Count}).", Bright);
+			return;
+		}
+		Hud.HideHint();
+		Run(Lay(0, card.Card));
 	}
 }
