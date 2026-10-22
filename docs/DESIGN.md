@@ -22,3 +22,9 @@ Hard (keeps the four worth most over every starter, valuing the crib; weighs you
 
 ## Scope for version 1
 Everything above. Later: muggins (claiming points the other forgot), three-player cribbage.
+
+## Changes from Darren's notes (2026-10-22)
+- Two, three or four players (four as partnerships). Three players get five cards and one goes from the deck to the crib.
+- The board stands lengthways to your right: up 50, down 40, up 30 (the S), with the double-skunk (60) and skunk (90) lines marked; one track per side.
+- The player on the dealer's right cuts; the dealer turns the starter from the lower half and the cut goes back.
+- A hand worth nothing spins a gold 19.

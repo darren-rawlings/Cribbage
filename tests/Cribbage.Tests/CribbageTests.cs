@@ -136,3 +136,89 @@ public class HandTests
 		Assert.True(wins >= 20, $"Hard won {wins} of 30");
 	}
 }
+
+public class MorePlayersTests
+{
+	private static void Play(CribbageHand hand, CribbageAi[] ais, Random random)
+	{
+		foreach (var ai in ais)
+			hand.Discard(ai.Player, ai.ChooseDiscard(hand), random.Next(30));
+		int moves = 0;
+		while (hand.Phase == CribPhase.Pegging && moves++ < 200)
+		{
+			hand.Play(ais[hand.Current].ChoosePlay(hand));
+			Assert.InRange(hand.Count, 0, 31);
+		}
+		if (hand.Phase == CribPhase.Show)
+			hand.Show();
+	}
+
+	[Fact]
+	public void ThreePlayersGetFiveEachAndTheCribGetsOneFromTheDeck()
+	{
+		var game = new CribbageGame(3);
+		var hand = game.Deal(Deck.Shuffled(new Random(1)));
+		Assert.All(Enumerable.Range(0, 3), p => Assert.Equal(5, hand.Hand(p).Count));
+		Assert.NotNull(hand.CribCard);
+		Assert.Equal(1, hand.DiscardCount);
+		var ais = Enumerable.Range(0, 3).Select(p => new CribbageAi(p, Difficulty.Medium, new Random(p))).ToArray();
+		foreach (var ai in ais)
+			hand.Discard(ai.Player, ai.ChooseDiscard(hand), 4);
+		Assert.Equal(4, hand.Crib.Count);
+		Assert.Contains(hand.CribCard!.Value, hand.Crib);
+		Assert.All(Enumerable.Range(0, 3), p => Assert.Equal(4, hand.Kept(p).Count));
+	}
+
+	[Fact]
+	public void FourPlayersAreTwoPartnershipsSharingAScore()
+	{
+		var game = new CribbageGame(4);
+		Assert.Equal(2, game.Scores.Length);
+		var hand = game.Deal(Deck.Shuffled(new Random(2)));
+		Assert.Equal(hand.Side(0), hand.Side(2));
+		Assert.NotEqual(hand.Side(0), hand.Side(1));
+		Assert.All(Enumerable.Range(0, 4), p => Assert.Equal(5, hand.Hand(p).Count));
+		Assert.Null(hand.CribCard);
+	}
+
+	[Theory]
+	[InlineData(3, 1)]
+	[InlineData(4, 2)]
+	[InlineData(3, 3)]
+	[InlineData(4, 4)]
+	public void BigTablesPlayToOneTwentyOne(int players, int seed)
+	{
+		var random = new Random(seed);
+		var game = new CribbageGame(players);
+		var ais = Enumerable.Range(0, players).Select(p => new CribbageAi(p, p % 2 == 0 ? Difficulty.Hard : Difficulty.Medium, random)).ToArray();
+		while (!game.IsOver && game.Hands < 80)
+		{
+			var hand = game.Deal(Deck.Shuffled(random));
+			Play(hand, ais, random);
+			Assert.Equal(CribPhase.Over, hand.Phase);
+			game.Finished();
+		}
+		Assert.True(game.IsOver);
+		Assert.Equal(121, game.Scores.Max());
+	}
+
+	[Fact]
+	public void TheShowGoesRoundFromTheDealersLeftAndEndsWithTheCrib()
+	{
+		var random = new Random(6);
+		var game = new CribbageGame(4);
+		var hand = game.Deal(Deck.Shuffled(random));
+		var ais = Enumerable.Range(0, 4).Select(p => new CribbageAi(p, Difficulty.Easy, random)).ToArray();
+		foreach (var ai in ais)
+			hand.Discard(ai.Player, ai.ChooseDiscard(hand), 3);
+		while (hand.Phase == CribPhase.Pegging)
+			hand.Play(ais[hand.Current].ChoosePlay(hand));
+		if (hand.Phase != CribPhase.Show)
+			return; // someone pegged out
+		var shows = hand.Show();
+		var expected = Enumerable.Range(1, 4).Select(k => (hand.Dealer + k) % 4).ToList();
+		Assert.Equal(expected.Take(shows.Count), shows.Take(4).Select(s => s.Player));
+		if (shows.Count == 5)
+			Assert.Equal("crib", shows[4].What);
+	}
+}

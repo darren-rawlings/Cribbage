@@ -12,41 +12,57 @@ using Renegade.Ui;
 namespace Cribbage.Game;
 
 /// <summary>
-/// Cribbage against Rosie, a game to 121 on a wooden board with pegs. Tap two cards and press
-/// "To the crib"; then in the play, tap a card to lay it (the count is shown; cards that would
-/// pass 31 are greyed). At the show, each hand is counted aloud and pegged.
+/// Cribbage for two to four (four as partnerships: you and Max against Rosie and Lena), a game
+/// to 121 on a wooden board standing to your right. Tap your card (or two) and press "To the
+/// crib"; the player on the dealer's right cuts the deck and the dealer turns the starter. In the
+/// play, tap a card to lay it (cards that would pass 31 are greyed). At the show, each hand is
+/// counted aloud and pegged; a hand worth nothing ("nineteen") spins a 19.
 /// </summary>
 public partial class Main : CardGame
 {
 	private readonly Dictionary<Card, Card3D> _nodes = new();
 	private CribbageGame _game = new();
 	private CribbageHand? _hand;
-	private CribbageAi _ai = null!;
+	private readonly CribbageAi?[] _ais = new CribbageAi?[4];
 	private Board _board = null!;
 	private Button _crib = null!;
-	private readonly int[] _laid = new int[2];
+	private readonly int[] _laid = new int[4];
+	private readonly bool[] _goSaid = new bool[4];
 	private readonly List<Card3D> _turned = new();
+	private List<Card3D> _stock = new();
 
 	protected override string Title => "Cribbage";
-	protected override string Hint => "Pick two for the crib, then play";
+	protected override string Hint => "Pick your crib cards, then play";
+	protected override int MinPlayers => 2;
+	protected override int MaxPlayers => 4;
 	protected override string NewGameText => _game.IsOver ? "New game" : "Next hand";
 	protected override IReadOnlyList<TutorialPage> TutorialPages => Tutorial.Pages;
 	protected override bool InProgress => !_game.IsOver && (_game.Hands > 0 || _hand is { Phase: not CribPhase.Over });
 
-	private Vector3 StockAt => Table.Centre + new Vector3(-1.45f, 0, -0.05f);
-	private Vector3 CribAt => Table.Centre + new Vector3(1.45f, 0, -0.05f);
+	private Vector3 StockAt => Table.Centre + new Vector3(-0.75f, 0, 0.1f);
+	private Vector3 CribAt => Table.Centre + new Vector3(0.7f, 0, 0.1f);
 
-	protected override void LevelChanged(Difficulty difficulty) => _ai = new CribbageAi(1, difficulty, Random);
+	/// <summary>Partners share a name in the score: "you and Max".</summary>
+	private string SideName(int side) => Players == 4 ? (side == 0 ? "You and Max" : "Rosie and Lena") : NameOf(side);
+
+	protected override void LevelChanged(Difficulty difficulty) => MakeAis(difficulty);
+
+	private void MakeAis(Difficulty difficulty)
+	{
+		for (int s = 0; s < Players; s++)
+			_ais[s] = s > 0 ? new CribbageAi(s, difficulty, new Random(Random.Next())) : Demo ? new CribbageAi(0, Difficulty.Medium, new Random(Random.Next())) : null;
+	}
 
 	protected override void AddSettings()
 	{
-		_board = new Board { Position = new Vector3(0, CardTable.FeltY, -1.45f) };
+		// The board stands lengthways to your right, clear of the cards in play.
+		_board = new Board { Tracks = Players == 4 ? 2 : Players, Position = new Vector3(2.0f, CardTable.FeltY, -0.45f) };
 		AddChild(_board);
 		_crib = Hud.AddButton("To the crib", true, Control.LayoutPreset.CenterBottom, -170, 170, -192, -128, 28);
 		_crib.Visible = false;
 		_crib.Pressed += () =>
 		{
-			if (!Busy && _hand is { Phase: CribPhase.Discard } && Fans[0].RaisedCards.Count == 2)
+			if (!Busy && _hand is { Phase: CribPhase.Discard } hand && Fans[0].RaisedCards.Count == hand.DiscardCount)
 				Run(Discard(Fans[0].RaisedCards.Select(n => n.Card).ToList()));
 		};
 	}
@@ -55,15 +71,16 @@ public partial class Main : CardGame
 	{
 		int round = Round;
 		_crib.Visible = false;
-		if (_game.IsOver)
+		if (_game.IsOver || _game.Hands == 0)
 		{
-			_game = new CribbageGame();
+			_game = new CribbageGame(Players);
 			_board.Reset();
 		}
-		_ai = new CribbageAi(1, Settings.Difficulty, new Random(Random.Next()));
+		MakeAis(Settings.Difficulty);
 		_nodes.Clear();
 		_turned.Clear();
 		Array.Clear(_laid);
+		Array.Clear(_goSaid);
 		_hand = null;
 		SetScore();
 		var order = Deck.Shuffled(Random);
@@ -74,26 +91,36 @@ public partial class Main : CardGame
 			_nodes[order[i]] = nodes[i];
 		var hand = _game.Deal(order);
 		_hand = hand;
-		await DealRound(nodes.Take(12).ToList(), Enumerable.Range(0, 12).Select(i => (hand.Pone + i) % 2).ToList(), spacing: 0.12f);
+		int dealt = hand.Dealt.Count;
+		await DealRound(nodes.Take(dealt).ToList(), Enumerable.Range(0, dealt).Select(i => (hand.Dealer + 1 + i) % Players).ToList(), spacing: 0.1f);
 		if (round != Round)
 			return;
+		var rest = nodes.Skip(dealt).ToList();
+		// Three players: one card goes straight to the crib.
+		if (hand.CribCard is { } extra)
+		{
+			await Await(Dealer.Deal(_nodes[extra], CribAt, 0, delay: 0));
+			rest.Remove(_nodes[extra]);
+		}
 		// The rest becomes the stock, off to one side.
-		var stock = nodes.Skip(12).ToList();
+		_stock = rest;
 		Tween? last = null;
-		for (int i = 0; i < stock.Count; i++)
-			last = CardMotion.Slide(stock[i], Dealer.InStack(StockAt, stock.Count - 1 - i), 0.25f);
+		for (int i = 0; i < _stock.Count; i++)
+			last = CardMotion.Slide(_stock[i], Dealer.InStack(StockAt, _stock.Count - 1 - i), 0.25f);
 		await Await(last);
 		await PickUpAll(p => hand.Hand(p).Select(c => _nodes[c]));
 		Hud.SetRestartVisible(true);
+		News($"{NameOf(hand.Dealer)} {(hand.Dealer == 0 ? "deal" : "deals")}: the crib is {(hand.Dealer == 0 ? "yours" : Names[hand.Dealer] + "'s")}.");
 		if (Demo)
 		{
-			await Discard(new CribbageAi(0, Difficulty.Medium, Random).ChooseDiscard(hand));
+			await Discard(_ais[0]!.ChooseDiscard(hand));
 			return;
 		}
 		Busy = false;
 		_crib.Visible = true;
 		_crib.Disabled = true;
-		Hud.SetStatus($"Choose two cards for {(hand.Dealer == 0 ? "your" : "Rosie's")} crib: tap them.", Bright);
+		string what = hand.DiscardCount == 2 ? "two cards" : "a card";
+		Hud.SetStatus($"Choose {what} for {(hand.Dealer == 0 ? "your" : Names[hand.Dealer] + "'s")} crib: tap {(hand.DiscardCount == 2 ? "them" : "it")}.", Bright);
 	}
 
 	private async Task Discard(IReadOnlyList<Card> mine)
@@ -102,13 +129,17 @@ public partial class Main : CardGame
 		Busy = true;
 		_crib.Visible = false;
 		Fans[0].LowerAll();
-		var theirs = _ai.ChooseDiscard(hand);
-		hand.Discard(0, mine);
-		var heels = hand.Discard(1, theirs, Random.Next(hand.Stock.Count - 4) + 2);
-		// Both slide two cards face down onto the crib.
+		var choices = new List<(int Player, IReadOnlyList<Card> Cards)> { (0, mine) };
+		for (int p = 1; p < Players; p++)
+			choices.Add((p, _ais[p]!.ChooseDiscard(hand)));
+		int cutAt = Random.Next(4, Math.Max(5, hand.Stock.Count - 4));
+		List<Pegged> heels = new();
+		foreach (var (p, cards) in choices)
+			heels = hand.Discard(p, cards, cutAt);
+		// Everyone slides their cards face down onto the crib.
 		var moves = new List<Task>();
-		int k = 0;
-		foreach (var (p, cards) in new[] { (0, mine), (1, (IReadOnlyList<Card>)theirs) })
+		int k = hand.CribCard != null ? 1 : 0;
+		foreach (var (p, cards) in choices)
 		{
 			var nodes = cards.Select(c => _nodes[c]).ToList();
 			foreach (var node in nodes)
@@ -118,12 +149,40 @@ public partial class Main : CardGame
 			moves.Add(Hands[p].Carry(nodes, targets, seconds: 0.4f, lift: 0.25f));
 		}
 		await Task.WhenAll(moves);
-		// The cut: the starter is turned face up on the stock.
-		var starter = _nodes[hand.Starter!.Value];
-		Hud.SetStatus(hand.Pone == 0 ? "You cut; Rosie turns the starter." : "Rosie cuts; you turn the starter.", Muted);
-		await Await(CardMotion.Fly(starter, FaceUpAt(StockAt + new Vector3(0, 0.25f, 0), 0.15f), 0.45f, lift: 0.3f, landed: () => Sounds.PlaySlap(StockAt)));
+		await Cut(cutAt);
 		await Pegs(heels);
 		await NextPlay();
+	}
+
+	/// <summary>
+	/// The cut: the player on the dealer's right lifts the top of the stock aside; the dealer turns
+	/// up the top card of what's left; the cut goes back and the starter goes on top, face up.
+	/// </summary>
+	private async Task Cut(int cutAt)
+	{
+		var hand = _hand!;
+		int cutter = hand.Cutter, dealer = hand.Dealer;
+		var starter = _nodes[hand.Starter!.Value];
+		var stock = hand.Stock.Select(c => _nodes[c]).ToList(); // top first
+		var top = stock.Take(cutAt).ToList();
+		Hud.SetStatus(cutter == 0 ? "You cut the deck." : $"{Names[cutter]} cuts the deck.", Muted);
+		Say(cutter, "Cut.", dealer);
+		// Top part aside, towards the cutter.
+		var aside = StockAt + new Vector3(0, 0, 0.62f);
+		await Hands[cutter].Carry(top.AsEnumerable().Reverse().ToList(), top.AsEnumerable().Reverse().Select((_, i) => Dealer.InStack(aside, i)).ToList(), seconds: 0.35f, lift: 0.2f);
+		// The dealer turns the top of the lower part face up, beside it.
+		Hud.SetStatus(dealer == 0 ? "You turn the starter." : $"{Names[dealer]} turns the starter.", Muted);
+		var shown = FaceUpAt(StockAt + new Vector3(0.68f, 0.01f, 0.62f), 0.1f);
+		await Hands[dealer].Carry(new[] { starter }, new[] { shown }, seconds: 0.4f, lift: 0.3f);
+		News($"The starter is the {Describe(hand.Starter.Value)}.");
+		// The cut goes back on the pack, and the starter on top, face up.
+		var under = stock.Skip(cutAt + 1).ToList();
+		var back = top.Concat(under).ToList();
+		Tween? last = null;
+		for (int i = 0; i < back.Count; i++)
+			last = CardMotion.Slide(back[i], Dealer.InStack(StockAt, back.Count - 1 - i), 0.25f);
+		await Await(last);
+		await Await(CardMotion.Fly(starter, new Transform3D(Card3D.FaceUp(0.1f), StockAt + Vector3.Up * (Dealer.CardThickness * (back.Count + 2))), 0.35f, lift: 0.15f, landed: () => Sounds.PlaySlap(StockAt)));
 	}
 
 	/// <summary>Moves the pegs for whatever was scored, and says it.</summary>
@@ -131,14 +190,12 @@ public partial class Main : CardGame
 	{
 		foreach (var peg in scored)
 		{
-			string who = peg.Player == 0 ? "You" : "Rosie";
-			Say(peg.Player == 1 ? 1 : 0, $"{peg.Why} for {peg.Points}");
-			Hud.SetStatus($"{who}: {peg.Why.ToLowerInvariant()} for {peg.Points}.", Bright);
-			await Await(_board.Peg(peg.Player, _hand!.ScoreOf(peg.Player)));
+			Say(peg.Player, $"{peg.Why} for {peg.Points}.");
+			Hud.SetStatus($"{NameOf(peg.Player)}: {peg.Why.ToLowerInvariant()} for {peg.Points}.", Bright);
+			await Await(_board.Peg(_hand!.Side(peg.Player), _hand.ScoreOf(peg.Player)));
 			SetScore();
 			await Pause(0.4f);
 		}
-		SayNone();
 	}
 
 	private async Task NextPlay()
@@ -157,7 +214,7 @@ public partial class Main : CardGame
 			return;
 		}
 		int p = hand.Current;
-		if (p == 0 && !Demo)
+		if (_ais[p] == null)
 		{
 			DimUnplayable(hand.Playable());
 			Busy = false;
@@ -168,8 +225,24 @@ public partial class Main : CardGame
 		await Pause(0.7f);
 		if (round != Round)
 			return;
-		var ai = p == 1 ? _ai : new CribbageAi(0, Difficulty.Medium, Random);
-		await Lay(p, ai.ChoosePlay(hand));
+		await Lay(p, _ais[p]!.ChoosePlay(hand));
+	}
+
+	/// <summary>Where a player's cards go in the play: in a row in front of them, towards the middle.</summary>
+	private Vector3 LaySpot(int p, int k)
+	{
+		var toward = Table.Centre - Table.Pile[p];
+		toward.Y = 0;
+		var dir = toward.Normalized();
+		var right = dir.Cross(Vector3.Up).Normalized();
+		float reach = p == 0 ? 0.95f : Players == 2 ? 0.95f : 0.45f;
+		return Table.Pile[p] + dir * reach + right * (-0.36f + k * 0.22f) + Vector3.Up * (CardTable.FeltY + 0.002f * (k + 1));
+	}
+
+	private float Facing(int p)
+	{
+		var toward = Table.Pile[p] - Table.Centre;
+		return p == 0 ? 0 : Mathf.Atan2(toward.X, toward.Z);
 	}
 
 	private async Task Lay(int p, Card card)
@@ -177,30 +250,32 @@ public partial class Main : CardGame
 		var hand = _hand!;
 		Busy = true;
 		DimUnplayable(null);
-		int before = hand.Sequence.Count;
+		int count = hand.Count + Score.Value(card);
 		var scored = hand.Play(card);
 		var node = _nodes[card];
-		// Each player lays their cards in a row in front of them.
-		var at = new Vector3(-0.85f + _laid[p] * 0.24f, CardTable.FeltY + 0.002f * _laid[p], p == 0 ? 0.25f : -0.85f);
-		_laid[p]++;
-		await PlayToTable(p, node, FaceUpAt(at, ((float)Random.NextDouble() - 0.5f) * 0.1f));
+		var at = LaySpot(p, _laid[p]++);
+		await PlayToTable(p, node, FaceUpAt(at, Facing(p) + ((float)Random.NextDouble() - 0.5f) * 0.1f));
 		_turned.Add(node);
-		Hud.SetStatus($"{(p == 0 ? "You" : "Rosie")}: {Card.RankName(card.Rank).ToLowerInvariant()}, {(hand.Sequence.Count == 0 ? "31" : hand.Count.ToString())}.", Muted);
+		Say(p, $"{Card.RankName(card.Rank)}: {count}.");
+		Hud.SetStatus($"{NameOf(p)}: {Card.RankName(card.Rank).ToLowerInvariant()}, {count}.", Muted);
 		await Pegs(scored);
-		// "Go": the other player couldn't play.
-		if (hand.Phase == CribPhase.Pegging && hand.SaidGo(1 - p))
-		{
-			Say(1 - p == 1 ? 1 : 0, "Go");
-			await Pause(0.6f);
-			SayNone();
-		}
+		// "Go": whoever couldn't play says so (once per count).
+		for (int q = 0; q < Players; q++)
+			if (hand.Phase == CribPhase.Pegging && hand.SaidGo(q) && !_goSaid[q])
+			{
+				_goSaid[q] = true;
+				Say(q, "Go.");
+				await Pause(0.5f);
+			}
 		// The count went back to zero: the cards played so far are turned face down.
 		if (hand.Sequence.Count == 0 && hand.Phase != CribPhase.Over)
 		{
+			Array.Clear(_goSaid);
 			await Pause(0.4f);
 			foreach (var turned in _turned)
 				CardMotion.Slide(turned, FaceDownAt(turned.GlobalPosition, 0.05f), 0.2f);
 			_turned.Clear();
+			News("The count starts again from zero.");
 			Hud.SetStatus("The count starts again from zero.", Muted);
 			await Pause(0.4f);
 		}
@@ -210,38 +285,87 @@ public partial class Main : CardGame
 	private async Task Show()
 	{
 		var hand = _hand!;
-		var starter = hand.Starter!.Value;
 		var shows = hand.Show();
 		foreach (var (player, what, items, points) in shows)
 		{
-			// Turn the cards being counted face up, together, in front of their player.
+			// Turn the cards being counted face up, together, in front of their player (the crib in the middle).
 			var cards = what == "crib" ? hand.Crib : hand.Kept(player);
-			float z = what == "crib" ? -0.3f : player == 0 ? 0.25f : -0.85f;
 			for (int i = 0; i < cards.Count; i++)
-				CardMotion.Fly(_nodes[cards[i]], FaceUpAt(new Vector3(-0.85f + i * 0.24f, CardTable.FeltY + 0.01f + 0.002f * i, z)), 0.35f, lift: 0.2f);
+			{
+				var at = what == "crib" ? Table.Centre + new Vector3(-0.36f + i * 0.24f, CardTable.FeltY + 0.01f + 0.002f * i, 0.55f) : LaySpot(player, i) + Vector3.Up * 0.01f;
+				CardMotion.Fly(_nodes[cards[i]], FaceUpAt(at, what == "crib" ? 0 : Facing(player)), 0.35f, lift: 0.2f);
+			}
 			await Pause(0.6f);
-			string whose = player == 0 ? (what == "crib" ? "Your crib" : "Your hand") : (what == "crib" ? "Rosie's crib" : "Rosie's hand");
+			string whose = what == "crib" ? (player == 0 ? "Your crib" : $"{Names[player]}'s crib") : (player == 0 ? "Your hand" : $"{Names[player]}'s hand");
 			// Counted aloud a phrase at a time, the way players say it.
 			var phrases = Score.Phrases(items);
-			if (phrases.Count == 0)
-				Hud.SetStatus($"{whose}: nineteen (nothing).", Bright);
 			for (int i = 0; i < phrases.Count; i++)
 			{
 				var shown = phrases.Skip(Math.Max(0, i - 1)).Take(Math.Min(2, i + 1));
 				Hud.SetStatus($"{whose}: {string.Join(", ", shown)}", Bright);
 				await Pause(0.55f);
 			}
-			if (phrases.Count > 0)
+			if (points == 0)
+			{
+				Hud.SetStatus($"{whose}: nineteen (nothing).", Bright);
+				Say(player, what == "crib" ? "Nineteen in the crib!" : "Nineteen!");
+				Nineteen(what == "crib" ? Table.Centre + new Vector3(0, 0, 0.55f) : LaySpot(player, 1.5f));
+			}
+			else
+			{
 				Hud.SetStatus($"{whose}: {points}.", Bright);
-			Say(player == 1 ? 1 : 0, points == 0 ? "Nineteen!" : $"{points}");
-			await Await(_board.Peg(player, hand.ScoreOf(player)));
+				Say(player, $"{(what == "crib" ? "In the crib: " : "")}{string.Join(", ", phrases)}.");
+			}
+			await Await(_board.Peg(hand.Side(player), hand.ScoreOf(player)));
 			SetScore();
-			await Pause(2.2f);
-			SayNone();
+			await Pause(2.0f);
 			if (hand.GameWon)
 				break;
 		}
 		EndHand();
+	}
+
+	private Vector3 LaySpot(int p, float k) => LaySpot(p, (int)k) + (LaySpot(p, (int)k + 1) - LaySpot(p, (int)k)) * (k - (int)k);
+
+	/// <summary>
+	/// "Nineteen": the score you can't make, said of a hand worth nothing. A gold ring with 19 in it
+	/// rises over the cards and spins.
+	/// </summary>
+	private void Nineteen(Vector3 at)
+	{
+		var sign = new Node3D { Position = at + Vector3.Up * 0.5f };
+		AddChild(sign);
+		sign.AddChild(new MeshInstance3D
+		{
+			Mesh = new TorusMesh { InnerRadius = 0.24f, OuterRadius = 0.29f, Rings = 32, RingSegments = 12 },
+			RotationDegrees = new Vector3(90, 0, 0),
+			MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("e8b33a"), Metallic = 0.7f, Roughness = 0.25f, EmissionEnabled = true, Emission = new Color("5a3d08") },
+		});
+		sign.AddChild(new Label3D
+		{
+			Text = "19",
+			FontSize = 120,
+			PixelSize = 0.0035f,
+			Modulate = new Color("fff3e0"),
+			OutlineSize = 18,
+			OutlineModulate = new Color("5a2a10"),
+			DoubleSided = true,
+		});
+		// Face the camera, then spin round twice and fade away.
+		sign.LookAt(Table.Camera.GlobalPosition, Vector3.Up);
+		sign.RotateObjectLocal(Vector3.Up, Mathf.Pi);
+		sign.Scale = Vector3.One * 0.2f;
+		var tween = sign.CreateTween();
+		tween.TweenProperty(sign, "scale", Vector3.One, 0.3f).SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.Out);
+		var spin = sign.CreateTween();
+		float turned = 0;
+		spin.TweenMethod(Callable.From<float>(t =>
+		{
+			sign.RotateObjectLocal(Vector3.Up, t - turned);
+			turned = t;
+		}), 0f, Mathf.Tau * 2, 1.6f).SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.InOut);
+		spin.TweenProperty(sign, "scale", Vector3.One * 0.01f, 0.25f);
+		spin.TweenCallback(Callable.From(sign.QueueFree));
 	}
 
 	private void EndHand()
@@ -252,22 +376,33 @@ public partial class Main : CardGame
 		if (_game.IsOver)
 		{
 			int w = _game.Winner;
-			Sparkle.Burst(this, _board.ToGlobal(Board.Hole(w, 121)) + Vector3.Up * 0.2f);
-			string skunk = _game.Skunk ? " A skunk!" : "";
-			Finish(w == 0 ? $"You peg out and win, 121 to {_game.Scores[1]}!{skunk}" : $"Rosie pegs out and wins, 121 to {_game.Scores[0]}.{skunk}",
-				w, _game.Skunk ? hand.Kept(w).Select(c => _nodes[c]) : null);
+			Sparkle.Burst(this, _board.ToGlobal(_board.Hole(w, 121)) + Vector3.Up * 0.2f);
+			string skunk = _game.DoubleSkunk ? " A double skunk!" : _game.Skunk ? " A skunk!" : "";
+			int runnerUp = _game.Scores.Where((_, i) => i != w).Max();
+			bool us = w == 0;
+			string who = SideName(w);
+			Finish(us ? $"{who} peg out and win, 121 to {runnerUp}!{skunk}" : $"{who} {(Players == 4 ? "peg" : "pegs")} out and {(Players == 4 ? "win" : "wins")}, 121 to {runnerUp}.{skunk}",
+				us ? 0 : 1, _game.Skunk ? hand.Kept(w).Select(c => _nodes[c]) : null);
 		}
 		else
 		{
-			Finish($"You {_game.Scores[0]}, Rosie {_game.Scores[1]}. {(hand.Dealer == 0 ? "Rosie" : "You")} deal{(hand.Dealer == 0 ? "s" : "")} next.", -1);
+			int next = (hand.Dealer + 1) % Players;
+			Finish($"{Standing()}. {(next == 0 ? "You deal" : $"{Names[next]} deals")} next.", -1);
 		}
 	}
 
+	private string Standing() => string.Join(", ", Enumerable.Range(0, _game.Scores.Length).Select(s => $"{SideName(s)} {_game.Scores[s]}"));
+
 	private void SetScore()
 	{
-		var scores = _hand != null ? new[] { _hand.ScoreOf(0), _hand.ScoreOf(1) } : _game.Scores;
-		Hud.SetScore($"To 121: you {scores[0]} · {scores[1]} Rosie   ·   Wins {Wins.First}–{Wins.Second}");
+		var scores = _game.Scores;
+		string line = Players == 4
+			? $"To 121: us {scores[0]} · them {scores[1]}"
+			: $"To 121: {string.Join(" · ", Enumerable.Range(0, Players).Select(s => $"{(s == 0 ? "you" : Names[s])} {scores[s]}"))}";
+		Hud.SetScore($"{line}   ·   Wins {Wins.First}–{Wins.Second}");
 	}
+
+	private static string Describe(Card card) => $"{Card.RankName(card.Rank).ToLowerInvariant()} of {card.Suit.ToString().ToLowerInvariant()}";
 
 	protected override void Tapped(Vector3 origin, Vector3 direction, Vector2 screen)
 	{
@@ -276,11 +411,11 @@ public partial class Main : CardGame
 		if (hand.Phase == CribPhase.Discard)
 		{
 			bool raise = !Fans[0].IsRaised(card);
-			if (raise && Fans[0].RaisedCards.Count >= 2)
+			if (raise && Fans[0].RaisedCards.Count >= hand.DiscardCount)
 				return;
 			Fans[0].RaiseCard(card, raise);
 			Fans[0].Settle(0.12f);
-			_crib.Disabled = Fans[0].RaisedCards.Count != 2;
+			_crib.Disabled = Fans[0].RaisedCards.Count != hand.DiscardCount;
 			return;
 		}
 		if (hand.Phase != CribPhase.Pegging || hand.Current != 0)

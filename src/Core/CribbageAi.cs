@@ -41,34 +41,58 @@ public sealed class CribbageAi
 		return v + 3.8; // the crib's other three cards are worth about this on average
 	}
 
+	/// <summary>A rough value of one card thrown into a crib (with three or four players).</summary>
+	private static double CribValue(Card a)
+	{
+		double v = a.Rank == 5 ? 1.5 : Score.Value(a) == 10 ? 0.4 : a.Rank is 7 or 8 ? 0.3 : 0;
+		return v + 3.4;
+	}
+
 	public List<Card> ChooseDiscard(CribbageHand hand)
 	{
-		var six = hand.Hand(Player).ToList();
+		var cards = hand.Hand(Player).ToList();
+		int throwing = hand.DiscardCount;
 		if (Difficulty == Difficulty.Easy)
-			return six.OrderBy(_ => _random.Next()).Take(2).ToList();
-		bool myCrib = hand.Dealer == Player;
-		var unseen = Deck.Standard().Where(c => !six.Contains(c)).ToList();
+			return cards.OrderBy(_ => _random.Next()).Take(throwing).ToList();
+		// The crib is ours if we (or, with four, our partner) dealt.
+		bool myCrib = hand.Side(hand.Dealer) == hand.Side(Player);
+		var unseen = Deck.Standard().Where(c => !cards.Contains(c)).ToList();
 		double best = double.MinValue;
-		List<Card> choice = six.Take(2).ToList();
-		for (int i = 0; i < 6; i++)
-			for (int j = i + 1; j < 6; j++)
+		List<Card> choice = cards.Take(throwing).ToList();
+		foreach (var thrown in Choose(cards.Count, throwing))
+		{
+			var keep = cards.Where((_, k) => !thrown.Contains(k)).ToList();
+			double value;
+			if (Difficulty == Difficulty.Medium)
+				value = Score.Items(keep, null).Sum(x => x.Points);
+			else
 			{
-				var keep = six.Where((_, k) => k != i && k != j).ToList();
-				double value;
-				if (Difficulty == Difficulty.Medium)
-					value = Score.Items(keep, null).Sum(x => x.Points);
-				else
-				{
-					value = unseen.Average(starter => Score.Hand(keep, starter));
-					value += (myCrib ? 1 : -1) * CribValue(six[i], six[j]);
-				}
-				if (value > best)
-				{
-					best = value;
-					choice = new List<Card> { six[i], six[j] };
-				}
+				value = unseen.Average(starter => Score.Hand(keep, starter));
+				double crib = throwing == 2 ? CribValue(cards[thrown[0]], cards[thrown[1]]) : CribValue(cards[thrown[0]]);
+				value += (myCrib ? 1 : -1) * crib;
 			}
+			if (value > best)
+			{
+				best = value;
+				choice = thrown.Select(k => cards[k]).ToList();
+			}
+		}
 		return choice;
+	}
+
+	/// <summary>Every way to pick one or two positions out of n.</summary>
+	private static IEnumerable<int[]> Choose(int n, int k)
+	{
+		for (int i = 0; i < n; i++)
+		{
+			if (k == 1)
+			{
+				yield return new[] { i };
+				continue;
+			}
+			for (int j = i + 1; j < n; j++)
+				yield return new[] { i, j };
+		}
 	}
 
 	public Card ChoosePlay(CribbageHand hand)
