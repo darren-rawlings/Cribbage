@@ -313,9 +313,12 @@ public partial class Main : CardGame
 			return new Vector3(-0.36f + k * 0.22f, CardTable.FeltY + 0.002f * (k + 1), Table.YourPlayZ);
 		var dir = Table.Toward[p];
 		var right = dir.Cross(Vector3.Up);
-		// Players at the sides lay theirs along their own place setting, clear of the middle.
-		float reach = Players == 2 ? 0.95f : Mathf.Abs(dir.X) > 0.9f ? 0.1f : 0.45f;
-		return Table.Pile[p] + dir * reach + right * (-0.36f + k * 0.22f) + Vector3.Up * (CardTable.FeltY + 0.002f * (k + 1));
+		// Players at the sides lay theirs along their own place setting, clear of the middle, spread
+		// wider (you see them from the side, and the setting is long enough for four).
+		bool side = Mathf.Abs(dir.X) > 0.9f;
+		float reach = Players == 2 ? 0.95f : side ? 0.1f : 0.45f;
+		float along = side ? -0.45f + k * 0.3f : -0.36f + k * 0.22f;
+		return Table.Pile[p] + dir * reach + right * along + Vector3.Up * (CardTable.FeltY + 0.002f * (k + 1));
 	}
 
 	private float Facing(int p)
@@ -366,12 +369,21 @@ public partial class Main : CardGame
 		var shows = hand.Show();
 		foreach (var (player, what, items, points) in shows)
 		{
-			// Turn the cards being counted face up, together, in front of their player (the crib in the middle).
+			// Turn the cards being counted face up, together, in front of their player. The crib is the
+			// dealer's to count after their hand: that's gathered into a pile where the crib was, and the
+			// crib laid out in its place, where nothing covers it.
 			var cards = what == "crib" ? hand.Crib : hand.Kept(player);
+			if (what == "crib")
+			{
+				var counted = hand.Kept(player);
+				for (int i = 0; i < counted.Count; i++)
+					CardMotion.Fly(_nodes[counted[i]], FaceUpAt(CribAt + Vector3.Up * (0.003f * (i + 1)), Facing(player)), 0.3f, lift: 0.15f);
+				await Pause(0.35f);
+			}
 			for (int i = 0; i < cards.Count; i++)
 			{
-				var at = what == "crib" ? Table.Centre + new Vector3(-0.36f + i * 0.24f, CardTable.FeltY + 0.01f + 0.002f * i, 0.55f) : LaySpot(player, i) + Vector3.Up * 0.01f;
-				CardMotion.Fly(_nodes[cards[i]], FaceUpAt(at, what == "crib" ? 0 : Facing(player)), 0.35f, lift: 0.2f);
+				var at = LaySpot(player, i) + Vector3.Up * 0.01f;
+				CardMotion.Fly(_nodes[cards[i]], FaceUpAt(at, Facing(player)), 0.35f, lift: 0.2f);
 			}
 			await Pause(0.6f);
 			string whose = what == "crib" ? (player == 0 ? "Your crib" : $"{Names[player]}'s crib") : (player == 0 ? "Your hand" : $"{Names[player]}'s hand");
