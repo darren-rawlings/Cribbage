@@ -39,8 +39,11 @@ public partial class Main : CardGame
 	protected override IReadOnlyList<TutorialPage> TutorialPages => Tutorial.Pages;
 	protected override bool InProgress => !_game.IsOver && (_game.Hands > 0 || _hand is { Phase: not CribPhase.Over });
 
-	private Vector3 StockAt => Table.Centre + new Vector3(-0.75f, 0, 0.1f);
-	private Vector3 CribAt => Table.Centre + new Vector3(0.7f, 0, 0.1f);
+	/// <summary>The deck sits beside the board, out of the way of the play.</summary>
+	private static Vector3 StockAt => new(1.0f, CardTable.FeltY, 0.75f);
+
+	/// <summary>The crib sits off to the left, clear of everyone's cards.</summary>
+	private static Vector3 CribAt => new(-1.65f, CardTable.FeltY, 0.85f);
 
 	/// <summary>Partners share a name in the score: "you and Max".</summary>
 	private string SideName(int side) => Players == 4 ? (side == 0 ? "You and Max" : "Rosie and Lena") : NameOf(side);
@@ -56,7 +59,7 @@ public partial class Main : CardGame
 	protected override void AddSettings()
 	{
 		// The board stands lengthways to your right, clear of the cards in play.
-		_board = new Board { Tracks = Players == 4 ? 2 : Players, Position = new Vector3(2.0f, CardTable.FeltY, -0.45f) };
+		_board = new Board { Tracks = Players == 4 ? 2 : Players, Position = new Vector3(1.85f, CardTable.FeltY, -0.65f) };
 		AddChild(_board);
 		_crib = Hud.AddButton("To the crib", true, Control.LayoutPreset.CenterBottom, -170, 170, -192, -128, 28);
 		_crib.Visible = false;
@@ -165,14 +168,12 @@ public partial class Main : CardGame
 		var starter = _nodes[hand.Starter!.Value];
 		var stock = hand.Stock.Select(c => _nodes[c]).ToList(); // top first
 		var top = stock.Take(cutAt).ToList();
-		Hud.SetStatus(cutter == 0 ? "You cut the deck." : $"{Names[cutter]} cuts the deck.", Muted);
 		Say(cutter, "Cut.", dealer);
 		// Top part aside, towards the cutter.
 		var aside = StockAt + new Vector3(0, 0, 0.62f);
 		await Hands[cutter].Carry(top.AsEnumerable().Reverse().ToList(), top.AsEnumerable().Reverse().Select((_, i) => Dealer.InStack(aside, i)).ToList(), seconds: 0.35f, lift: 0.2f);
 		// The dealer turns the top of the lower part face up, beside it.
-		Hud.SetStatus(dealer == 0 ? "You turn the starter." : $"{Names[dealer]} turns the starter.", Muted);
-		var shown = FaceUpAt(StockAt + new Vector3(0.68f, 0.01f, 0.62f), 0.1f);
+		var shown = FaceUpAt(StockAt + new Vector3(-0.68f, 0.01f, 0.62f), 0.1f);
 		await Hands[dealer].Carry(new[] { starter }, new[] { shown }, seconds: 0.4f, lift: 0.3f);
 		News($"The starter is the {Describe(hand.Starter.Value)}.");
 		// The cut goes back on the pack, and the starter on top, face up.
@@ -191,7 +192,6 @@ public partial class Main : CardGame
 		foreach (var peg in scored)
 		{
 			Say(peg.Player, $"{peg.Why} for {peg.Points}.");
-			Hud.SetStatus($"{NameOf(peg.Player)}: {peg.Why.ToLowerInvariant()} for {peg.Points}.", Bright);
 			await Await(_board.Peg(_hand!.Side(peg.Player), _hand.ScoreOf(peg.Player)));
 			SetScore();
 			await Pause(0.4f);
@@ -214,6 +214,7 @@ public partial class Main : CardGame
 			return;
 		}
 		int p = hand.Current;
+		ShowTurn(p);
 		if (_ais[p] == null)
 		{
 			DimUnplayable(hand.Playable());
@@ -222,6 +223,7 @@ public partial class Main : CardGame
 			return;
 		}
 		Busy = true;
+		Hud.SetStatus($"{Names[p]}'s turn. The count is {hand.Count}.", Muted);
 		await Pause(0.7f);
 		if (round != Round)
 			return;
@@ -257,7 +259,6 @@ public partial class Main : CardGame
 		await PlayToTable(p, node, FaceUpAt(at, Facing(p) + ((float)Random.NextDouble() - 0.5f) * 0.1f));
 		_turned.Add(node);
 		Say(p, $"{Card.RankName(card.Rank)}: {count}.");
-		Hud.SetStatus($"{NameOf(p)}: {Card.RankName(card.Rank).ToLowerInvariant()}, {count}.", Muted);
 		await Pegs(scored);
 		// "Go": whoever couldn't play says so (once per count).
 		for (int q = 0; q < Players; q++)
@@ -276,7 +277,6 @@ public partial class Main : CardGame
 				CardMotion.Slide(turned, FaceDownAt(turned.GlobalPosition, 0.05f), 0.2f);
 			_turned.Clear();
 			News("The count starts again from zero.");
-			Hud.SetStatus("The count starts again from zero.", Muted);
 			await Pause(0.4f);
 		}
 		await NextPlay();
@@ -285,6 +285,7 @@ public partial class Main : CardGame
 	private async Task Show()
 	{
 		var hand = _hand!;
+		ShowTurn(-1);
 		var shows = hand.Show();
 		foreach (var (player, what, items, points) in shows)
 		{
@@ -299,12 +300,7 @@ public partial class Main : CardGame
 			string whose = what == "crib" ? (player == 0 ? "Your crib" : $"{Names[player]}'s crib") : (player == 0 ? "Your hand" : $"{Names[player]}'s hand");
 			// Counted aloud a phrase at a time, the way players say it.
 			var phrases = Score.Phrases(items);
-			for (int i = 0; i < phrases.Count; i++)
-			{
-				var shown = phrases.Skip(Math.Max(0, i - 1)).Take(Math.Min(2, i + 1));
-				Hud.SetStatus($"{whose}: {string.Join(", ", shown)}", Bright);
-				await Pause(0.55f);
-			}
+			Hud.SetStatus($"Counting {(player == 0 ? whose.ToLowerInvariant() : whose)}…", Muted);
 			if (points == 0)
 			{
 				Hud.SetStatus($"{whose}: nineteen (nothing).", Bright);
@@ -313,8 +309,10 @@ public partial class Main : CardGame
 			}
 			else
 			{
-				Hud.SetStatus($"{whose}: {points}.", Bright);
 				Say(player, $"{(what == "crib" ? "In the crib: " : "")}{string.Join(", ", phrases)}.");
+				// Give the count time to be read before it's pegged.
+				await Pause(0.35f * phrases.Count);
+				Hud.SetStatus($"{whose}: {points}.", Bright);
 			}
 			await Await(_board.Peg(hand.Side(player), hand.ScoreOf(player)));
 			SetScore();
