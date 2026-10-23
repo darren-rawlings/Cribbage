@@ -103,8 +103,18 @@ public partial class Main : CardGame
 		};
 	}
 
+	/// <summary>`--nineteen` shows the 19 popup first thing, for checks.</summary>
+	protected override void DevArg(string name, string value) => _nineteenCheck |= name == "--nineteen";
+
+	private bool _nineteenCheck;
+
 	protected override async Task NewRound()
 	{
+		if (_nineteenCheck)
+		{
+			_nineteenCheck = false;
+			await ShowNineteen("Rosie's hand: nineteen!");
+		}
 		int round = Round;
 		_crib.Visible = false;
 		if (_game.IsOver || _game.Hands == 0)
@@ -338,7 +348,7 @@ public partial class Main : CardGame
 			{
 				Hud.SetStatus($"{whose}: nineteen (nothing).", Bright);
 				Say(player, what == "crib" ? "Nineteen in the crib!" : "Nineteen!");
-				Nineteen(what == "crib" ? Table.Centre + new Vector3(0, 0, 0.55f) : LaySpot(player, 1.5f));
+				await ShowNineteen($"{whose}: nineteen!");
 			}
 			else
 			{
@@ -358,45 +368,14 @@ public partial class Main : CardGame
 
 	private Vector3 LaySpot(int p, float k) => LaySpot(p, (int)k) + (LaySpot(p, (int)k + 1) - LaySpot(p, (int)k)) * (k - (int)k);
 
-	/// <summary>
-	/// "Nineteen": the score you can't make, said of a hand worth nothing. A gold ring with 19 in it
-	/// rises over the cards and spins.
-	/// </summary>
-	private void Nineteen(Vector3 at)
+	/// <summary>The 19 moment: the screen dims and the 19 spins and glows until you tap it (in the demo, a few seconds).</summary>
+	private async Task ShowNineteen(string caption)
 	{
-		var sign = new Node3D { Position = at + Vector3.Up * 0.5f };
-		AddChild(sign);
-		sign.AddChild(new MeshInstance3D
-		{
-			Mesh = new TorusMesh { InnerRadius = 0.24f, OuterRadius = 0.29f, Rings = 32, RingSegments = 12 },
-			RotationDegrees = new Vector3(90, 0, 0),
-			MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("e8b33a"), Metallic = 0.7f, Roughness = 0.25f, EmissionEnabled = true, Emission = new Color("5a3d08") },
-		});
-		sign.AddChild(new Label3D
-		{
-			Text = "19",
-			FontSize = 120,
-			PixelSize = 0.0035f,
-			Modulate = new Color("fff3e0"),
-			OutlineSize = 18,
-			OutlineModulate = new Color("5a2a10"),
-			DoubleSided = true,
-		});
-		// Face the camera, then spin round twice and fade away.
-		sign.LookAt(Table.Camera.GlobalPosition, Vector3.Up);
-		sign.RotateObjectLocal(Vector3.Up, Mathf.Pi);
-		sign.Scale = Vector3.One * 0.2f;
-		var tween = sign.CreateTween();
-		tween.TweenProperty(sign, "scale", Vector3.One, 0.3f).SetTrans(Tween.TransitionType.Back).SetEase(Tween.EaseType.Out);
-		var spin = sign.CreateTween();
-		float turned = 0;
-		spin.TweenMethod(Callable.From<float>(t =>
-		{
-			sign.RotateObjectLocal(Vector3.Up, t - turned);
-			turned = t;
-		}), 0f, Mathf.Tau * 2, 1.6f).SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.InOut);
-		spin.TweenProperty(sign, "scale", Vector3.One * 0.01f, 0.25f);
-		spin.TweenCallback(Callable.From(sign.QueueFree));
+		var popup = new Nineteen(caption);
+		Hud.AddChild(popup);
+		if (Demo)
+			GetTree().CreateTimer(2.5f).Timeout += popup.Close;
+		await popup.Closed;
 	}
 
 	private void EndHand()
