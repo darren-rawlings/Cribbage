@@ -173,12 +173,19 @@ public partial class Main : CardGame
 			_ => new[] { left, opposite, right },
 		};
 		table.Arrange(Players);
+		// Your cards in play: their near edge just above the top of your fan (a card raised in it), so
+		// they aren't hidden behind it. CardFan's radius is 0.62, and a raised card stands 0.16 higher.
+		var fanTop = table.FanPivot[0] * new Vector3(0, 0.62f + 0.16f + Card3D.Height / 2, 0);
+		_yourLayZ = FeltAt(camera.UnprojectPosition(fanTop).Y - 10) - Card3D.Height / 2;
 	}
 
 	/// <summary>`--nineteen` shows the 19 popup first thing, for checks.</summary>
 	protected override void DevArg(string name, string value) => _nineteenCheck |= name == "--nineteen";
 
 	private bool _nineteenCheck;
+
+	/// <summary>How far down the table your cards in play lie (see <see cref="LayOut"/>).</summary>
+	private float _yourLayZ;
 
 	protected override async Task NewRound()
 	{
@@ -348,10 +355,12 @@ public partial class Main : CardGame
 	/// <summary>Where a player's cards go in the play: in a row in front of them, towards the middle.</summary>
 	private Vector3 LaySpot(int p, int k)
 	{
+		if (p == 0)
+			return new Vector3(-0.36f + k * 0.22f, CardTable.FeltY + 0.002f * (k + 1), _yourLayZ);
 		var dir = Table.Toward[p];
 		var right = dir.Cross(Vector3.Up);
 		// Players at the sides lay theirs along their own place setting, clear of the middle.
-		float reach = p == 0 || Players == 2 ? 0.95f : Mathf.Abs(dir.X) > 0.9f ? 0.1f : 0.45f;
+		float reach = Players == 2 ? 0.95f : Mathf.Abs(dir.X) > 0.9f ? 0.1f : 0.45f;
 		return Table.Pile[p] + dir * reach + right * (-0.36f + k * 0.22f) + Vector3.Up * (CardTable.FeltY + 0.002f * (k + 1));
 	}
 
