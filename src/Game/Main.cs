@@ -99,93 +99,32 @@ public partial class Main : CardGame
 	}
 
 	/// <summary>
-	/// The board stands lengthways down the right of the table, as far below the far edge of the felt
-	/// as above the near edge, as they look on screen, and the table is set round it by eye: your
-	/// place setting sits just above the status line, the one across from you has its near edge in
-	/// line with the top of the board, and a player on the left has theirs halfway between those two
-	/// and as far in from the left edge as the board is from the right. With four, the player on the
-	/// right sits at the board, their place setting level with the left one, between the middle of
-	/// the table and the board. The deck sits above the board, beside the setting across from you.
-	/// Everything is measured from the three-lane board, so nothing moves with the number of players
-	/// (the board only grows a lane for three).
+	/// The table is set by eye like every card game's (<see cref="CardTable.SetByEye"/>), with the
+	/// board standing lengthways in the strip down the right, so three players sit left and across
+	/// from you, and with four the player on the right has their place setting just in from the
+	/// board. The deck sits above the board, beside the setting across from you. Nothing moves with
+	/// the number of players (the board only grows a lane for three).
 	/// </summary>
 	protected override void LayOut(CardTable table)
 	{
 		_board = new Board { Tracks = Players == 3 ? 3 : 2 };
 		AddChild(_board);
+		// The strip is the three-lane board's.
 		var reference = new Board { Tracks = 3 };
-		float farEnd = reference.FarEnd, nearEnd = reference.NearEnd, width = reference.Width;
+		float farEnd = reference.FarEnd, width = reference.Width;
 		reference.Free();
-		// Your place setting the same size as the one across from you, your hands on its ends as theirs are.
-		table.YourMatSize = new Vector2(2.0f, 1.15f);
-		table.YourHandsApart = 0.72f;
-		var camera = table.Camera;
-		var size = GetViewport().GetVisibleRect().Size;
-		float Y(float z, float height = CardTable.FeltY) => camera.UnprojectPosition(new Vector3(0, height, z)).Y;
-		// The felt under a height on the screen.
-		float FeltAt(float y)
-		{
-			var (origin, direction) = table.Ray(new Vector2(size.X / 2, y));
-			return (origin + direction * ((CardTable.FeltY - origin.Y) / direction.Y)).Z;
-		}
-		// Finds z where a measure that grows as things move towards you reaches a target.
-		static float Solve(Func<float, float> measure, float target)
-		{
-			float lo = -5, hi = 5;
-			for (int i = 0; i < 40; i++)
-			{
-				float mid = (lo + hi) / 2;
-				if (measure(mid) < target)
-					lo = mid;
-				else
-					hi = mid;
-			}
-			return (lo + hi) / 2;
-		}
-		float farEdge = Y(CardTable.FeltFar), nearEdge = Y(CardTable.FeltNear);
-		float boardZ = Solve(z => (Y(z + farEnd, Board.Thick) - farEdge) - (nearEdge - Y(z + nearEnd, Board.Thick)), 0);
-		const float boardX = 1.85f;
-		_board.Position = new Vector3(boardX, CardTable.FeltY, boardZ);
-		float boardTop = Y(boardZ + farEnd, Board.Thick);
-
-		// Yours, just above the status line (GameHud's: 250 up from the bottom of the screen).
-		table.YourPlace = FeltAt(size.Y - 250 - 6) - table.YourHalfDepth;
-		float yoursTop = Y(table.YourPlace - table.YourHalfDepth);
-		// Across from you: its near edge in line with the top of the board.
-		const float acrossHalf = 0.575f, sideHalf = 0.875f, sideDepth = 1.0f, sideSeat = -1.78f;
-		float across = FeltAt(boardTop) - acrossHalf;
-		var opposite = new CardTable.Place(new Vector2(0, across - 0.75f), Vector2.Down);
-		// The deck: on the right of that setting, above the board.
-		StockAt = new Vector3(1.47f, CardTable.FeltY, across);
-		// On the left: halfway between the setting across from you and yours, the setting under the
-		// seat (so the fan stays on screen).
-		float level = Solve(z => (Y(z - sideHalf) - boardTop) - (yoursTop - Y(z + sideHalf)), 0);
-		float leftMat = -(boardX + width / 2) + sideDepth / 2;
-		var left = new CardTable.Place(new Vector2(sideSeat, level), Vector2.Right, leftMat - sideSeat);
-		// On the right (four players): their setting just in from the board, the seat over it (so the fan is clear of the board).
-		const float rightSeat = 0.8f;
-		float rightMat = boardX - width / 2 - 0.12f - sideDepth / 2;
-		var right = new CardTable.Place(new Vector2(rightSeat, level), Vector2.Left, rightSeat - rightMat);
-		table.Layout = Players switch
-		{
-			2 => new[] { opposite },
-			3 => new[] { left, opposite },
-			_ => new[] { left, opposite, right },
-		};
-		table.Arrange(Players);
-		// Your cards in play: their near edge just above the top of your fan (a card raised in it), so
-		// they aren't hidden behind it. CardFan's radius is 0.62, and a raised card stands 0.16 higher.
-		var fanTop = table.FanPivot[0] * new Vector3(0, 0.62f + 0.16f + Card3D.Height / 2, 0);
-		_yourLayZ = FeltAt(camera.UnprojectPosition(fanTop).Y - 10) - Card3D.Height / 2;
+		const float boardX = CardTable.FeltHalfWidth - CardTable.SideMargin - 0.584f;
+		float? inner = Players == 4 ? boardX - width / 2 - 0.12f - 0.5f : null;
+		table.SetByEye(Players, StatusTop, rightAt: inner, acrossAtThree: true);
+		_board.Position = new Vector3(boardX, CardTable.FeltY, table.StripFar() - farEnd);
+		// The deck: on the right of the setting across from you, above the board.
+		StockAt = new Vector3(1.47f, CardTable.FeltY, table.Pile[Players == 2 ? 1 : 2].Z);
 	}
 
 	/// <summary>`--nineteen` shows the 19 popup first thing, for checks.</summary>
 	protected override void DevArg(string name, string value) => _nineteenCheck |= name == "--nineteen";
 
 	private bool _nineteenCheck;
-
-	/// <summary>How far down the table your cards in play lie (see <see cref="LayOut"/>).</summary>
-	private float _yourLayZ;
 
 	protected override async Task NewRound()
 	{
@@ -356,7 +295,7 @@ public partial class Main : CardGame
 	private Vector3 LaySpot(int p, int k)
 	{
 		if (p == 0)
-			return new Vector3(-0.36f + k * 0.22f, CardTable.FeltY + 0.002f * (k + 1), _yourLayZ);
+			return new Vector3(-0.36f + k * 0.22f, CardTable.FeltY + 0.002f * (k + 1), Table.YourPlayZ);
 		var dir = Table.Toward[p];
 		var right = dir.Cross(Vector3.Up);
 		// Players at the sides lay theirs along their own place setting, clear of the middle.
