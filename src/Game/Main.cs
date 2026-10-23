@@ -46,9 +46,9 @@ public partial class Main : CardGame
 	private Vector3 CribAt => CribFor(_hand?.Dealer ?? 0);
 
 	/// <summary>
-	/// Beside a seat's place setting: on its right, else in front of it, else on its left, whichever is
-	/// clear of the board, the middle of the table, the deck and the other place settings (failing all
-	/// those, on the far end of its own).
+	/// Beside a seat's place setting: on its right, else in front of it, else on its left (or past its
+	/// far left corner), whichever is clear of the board, the middle of the table, the deck and the
+	/// other place settings (failing all those, on the far end of its own).
 	/// </summary>
 	private Vector3 CribFor(int dealer)
 	{
@@ -71,7 +71,7 @@ public partial class Main : CardGame
 					return false;
 			return true;
 		}
-		foreach (var spot in new[] { mat + r * (half + 0.42f), mat + f * 0.95f, mat - r * (half + 0.42f) })
+		foreach (var spot in new[] { mat + r * (half + 0.42f), mat + f * 0.95f, mat - r * (half + 0.42f), mat - r * (half + 0.42f) - f * 0.45f })
 			if (Clear(spot))
 				return spot;
 		// Crowded (four players, with the board): on the far end of their own place setting.
@@ -102,6 +102,14 @@ public partial class Main : CardGame
 				Run(Discard(Fans[0].RaisedCards.Select(n => n.Card).ToList()));
 		};
 	}
+
+	/// <summary>
+	/// The board stands down the right of the table, so with three players it takes the right-hand
+	/// seat: one player sits on the left facing it and one across from you.
+	/// </summary>
+	protected override (Vector2 At, Vector2 Facing)[]? SeatLayout(int players) => players == 3
+		? new[] { (new Vector2(-1.78f, -0.35f), Vector2.Right), (new Vector2(0, -2.55f), Vector2.Down) }
+		: null;
 
 	/// <summary>`--nineteen` shows the 19 popup first thing, for checks.</summary>
 	protected override void DevArg(string name, string value) => _nineteenCheck |= name == "--nineteen";
@@ -280,7 +288,8 @@ public partial class Main : CardGame
 		toward.Y = 0;
 		var dir = toward.Normalized();
 		var right = dir.Cross(Vector3.Up).Normalized();
-		float reach = p == 0 ? 0.95f : Players == 2 ? 0.95f : 0.45f;
+		// Players at the sides lay theirs along their own place setting, clear of the middle.
+		float reach = p == 0 || Players == 2 ? 0.95f : Mathf.Abs(dir.X) > 0.9f ? 0.1f : 0.45f;
 		return Table.Pile[p] + dir * reach + right * (-0.36f + k * 0.22f) + Vector3.Up * (CardTable.FeltY + 0.002f * (k + 1));
 	}
 
