@@ -53,7 +53,7 @@ public partial class Main : CardGame
 	private Vector3 CribFor(int dealer)
 	{
 		if (dealer == 0)
-			return new Vector3(-1.65f, CardTable.FeltY, 0.85f);
+			return new Vector3(-1.65f, CardTable.FeltY, Table.YourPlace - 0.3f);
 		var mat = Table.Pile[dealer];
 		var toward = Table.Centre - mat;
 		// Seats face straight across the table: their facing is along one axis.
@@ -64,7 +64,7 @@ public partial class Main : CardGame
 		{
 			if (Mathf.Abs(p.X) > 2.3f || p.X > 1.05f || p.DistanceTo(Table.Centre) < 0.8f || p.DistanceTo(StockAt) < 0.9f)
 				return false;
-			if (Mathf.Abs(p.X) < 2.15f && p.Z > 0.2f)
+			if (Mathf.Abs(p.X) < 2.15f && p.Z > Table.YourPlace - CardTable.YourHalfDepth - 0.4f)
 				return false; // your place setting
 			for (int s = 1; s < Players; s++)
 				if (s != dealer && p.DistanceTo(Table.Pile[s]) < 1.25f)
@@ -91,9 +91,6 @@ public partial class Main : CardGame
 
 	protected override void AddSettings()
 	{
-		// The board stands lengthways to your right, clear of the cards in play.
-		_board = new Board { Tracks = Players == 4 ? 2 : Players, Position = new Vector3(1.85f, CardTable.FeltY, -0.65f) };
-		AddChild(_board);
 		_crib = Hud.AddButton("To the crib", true, Control.LayoutPreset.CenterBottom, -170, 170, -192, -128, 28);
 		_crib.Visible = false;
 		_crib.Pressed += () =>
@@ -104,12 +101,67 @@ public partial class Main : CardGame
 	}
 
 	/// <summary>
-	/// The board stands down the right of the table, so with three players it takes the right-hand
-	/// seat: one player sits on the left facing it and one across from you.
+	/// The board stands lengthways down the right of the table, as far below the far edge of the felt
+	/// as above the near edge, as they look on screen. With two or three players it takes the
+	/// right-hand seat and the table is set round it, by eye: your place setting sits just above the
+	/// status line, the one across from you is pushed up until the board reaches as far beside it
+	/// as beside yours, and a player on the left has theirs level with the board's middle and as far
+	/// in from the left edge as the board is from the right. (Four players keep the usual seats.)
 	/// </summary>
-	protected override (Vector2 At, Vector2 Facing)[]? SeatLayout(int players) => players == 3
-		? new[] { (new Vector2(-1.78f, -0.35f), Vector2.Right), (new Vector2(0, -2.55f), Vector2.Down) }
-		: null;
+	protected override void LayOut(CardTable table)
+	{
+		_board = new Board { Tracks = Players == 4 ? 2 : Players };
+		AddChild(_board);
+		var camera = table.Camera;
+		var size = GetViewport().GetVisibleRect().Size;
+		float Y(float z, float height = CardTable.FeltY) => camera.UnprojectPosition(new Vector3(0, height, z)).Y;
+		// The felt under a height on the screen.
+		float FeltAt(float y)
+		{
+			var (origin, direction) = table.Ray(new Vector2(size.X / 2, y));
+			return (origin + direction * ((CardTable.FeltY - origin.Y) / direction.Y)).Z;
+		}
+		// Finds z where a measure that grows as things move towards you reaches a target.
+		static float Solve(Func<float, float> measure, float target)
+		{
+			float lo = -5, hi = 5;
+			for (int i = 0; i < 40; i++)
+			{
+				float mid = (lo + hi) / 2;
+				if (measure(mid) < target)
+					lo = mid;
+				else
+					hi = mid;
+			}
+			return (lo + hi) / 2;
+		}
+		float farEdge = Y(CardTable.FeltFar), nearEdge = Y(CardTable.FeltNear);
+		float boardZ = Solve(z => (Y(z + _board.FarEnd, Board.Thick) - farEdge) - (nearEdge - Y(z + _board.NearEnd, Board.Thick)), 0);
+		_board.Position = new Vector3(1.85f, CardTable.FeltY, boardZ);
+		if (Players == 4)
+			return;
+		float boardTop = Y(boardZ + _board.FarEnd, Board.Thick), boardBottom = Y(boardZ + _board.NearEnd, Board.Thick);
+
+		// Yours, just above the status line (GameHud's: 250 up from the bottom of the screen).
+		table.YourPlace = FeltAt(size.Y - 250 - 6) - CardTable.YourHalfDepth;
+		float overlap = boardBottom - Y(table.YourPlace - CardTable.YourHalfDepth);
+		// Across from you: its near edge as far below the board's top as the board's bottom is below your far edge.
+		const float acrossHalf = 0.575f, sideHalf = 0.875f, sideDepth = 1.0f, sideSeat = -1.78f;
+		float across = FeltAt(boardTop + overlap) - acrossHalf;
+		var opposite = new CardTable.Place(new Vector2(0, across - 0.75f), Vector2.Down);
+		if (Players == 2)
+		{
+			table.Layout = new[] { opposite };
+		}
+		else
+		{
+			// On the left: level with the board, the setting under the seat (the fan stays on screen).
+			float level = Solve(z => (Y(z - sideHalf) + Y(z + sideHalf)) / 2, (boardTop + boardBottom) / 2);
+			float x = -(_board.Position.X + _board.Width / 2) + sideDepth / 2;
+			table.Layout = new[] { new CardTable.Place(new Vector2(sideSeat, level), Vector2.Right, x - sideSeat), opposite };
+		}
+		table.Arrange(Players);
+	}
 
 	/// <summary>`--nineteen` shows the 19 popup first thing, for checks.</summary>
 	protected override void DevArg(string name, string value) => _nineteenCheck |= name == "--nineteen";

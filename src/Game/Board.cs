@@ -15,7 +15,9 @@ namespace Cribbage.Game;
 /// </summary>
 public partial class Board : Node3D
 {
-	private const float Thick = 0.07f, Lane = 0.072f, Step = 0.061f, GroupGap = 0.03f;
+	/// <summary>How thick the board is (its top is this far above the felt).</summary>
+	public const float Thick = 0.07f;
+	private const float Lane = 0.072f, Step = 0.061f, GroupGap = 0.03f;
 
 	private MeshInstance3D[,] _pegs = null!;
 	private int[,] _at = null!;
@@ -30,15 +32,20 @@ public partial class Board : Node3D
 	/// <summary>Half the distance between the left and right columns.</summary>
 	private float C => Tracks * Lane + 0.16f;
 
-	private float Width => 2 * C + Tracks * Lane + 0.2f;
+	/// <summary>Across the board (x).</summary>
+	public float Width => 2 * C + Tracks * Lane + 0.2f;
+
+	/// <summary>The far and near ends of the board, from its position (z).</summary>
+	public float FarEnd => Top - C - 0.22f;
+	public float NearEnd => RightBottom + C / 2 + 0.3f;
 
 	// Where the straight runs start and end, along the board (z; up the board is towards -z).
 	private const float Top = -1.42f;
 	private static float Run(int holes) => holes * Step + (holes - 1) / 5 * GroupGap;
 	private static float RightBottom => Top + Run(40);
 	private float LeftBottom => Top + Run(35);
-	private float Length => (RightBottom + C / 2 + 0.3f) - (Top - C - 0.22f);
-	private float Middle => ((RightBottom + C / 2 + 0.3f) + (Top - C - 0.22f)) / 2;
+	private float Length => NearEnd - FarEnd;
+	private float Middle => (NearEnd + FarEnd) / 2;
 
 	public override void _Ready()
 	{
