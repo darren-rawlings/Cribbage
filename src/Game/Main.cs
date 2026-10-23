@@ -39,8 +39,8 @@ public partial class Main : CardGame
 	protected override IReadOnlyList<TutorialPage> TutorialPages => Tutorial.Pages;
 	protected override bool InProgress => !_game.IsOver && (_game.Hands > 0 || _hand is { Phase: not CribPhase.Over });
 
-	/// <summary>The deck sits beside the board, out of the way of the play.</summary>
-	private static Vector3 StockAt => new(1.0f, CardTable.FeltY, 0.75f);
+	/// <summary>The deck sits above the board, beside the place setting across from you (see <see cref="LayOut"/>).</summary>
+	private Vector3 StockAt { get; set; }
 
 	/// <summary>The crib sits beside the dealer's place setting (it's their extra hand).</summary>
 	private Vector3 CribAt => CribFor(_hand?.Dealer ?? 0);
@@ -55,9 +55,7 @@ public partial class Main : CardGame
 		if (dealer == 0)
 			return new Vector3(-(Table.YourMatSize.X / 2 + 0.42f), CardTable.FeltY, Table.YourPlace);
 		var mat = Table.Pile[dealer];
-		var toward = Table.Centre - mat;
-		// Seats face straight across the table: their facing is along one axis.
-		var f = Mathf.Abs(toward.X) > Mathf.Abs(toward.Z) ? new Vector3(Mathf.Sign(toward.X), 0, 0) : new Vector3(0, 0, Mathf.Sign(toward.Z));
+		var f = Table.Toward[dealer];
 		var r = f.Cross(Vector3.Up);
 		float half = f.Z == 0 ? 0.875f : 1.0f;
 		bool Clear(Vector3 p)
@@ -102,16 +100,22 @@ public partial class Main : CardGame
 
 	/// <summary>
 	/// The board stands lengthways down the right of the table, as far below the far edge of the felt
-	/// as above the near edge, as they look on screen. With two or three players it takes the
-	/// right-hand seat and the table is set round it, by eye: your place setting sits just above the
-	/// status line, the one across from you has its near edge in line with the top of the board, and
-	/// a player on the left has theirs halfway between those two and as far in from the left edge as
-	/// the board is from the right. (Four players keep the usual seats.)
+	/// as above the near edge, as they look on screen, and the table is set round it by eye: your
+	/// place setting sits just above the status line, the one across from you has its near edge in
+	/// line with the top of the board, and a player on the left has theirs halfway between those two
+	/// and as far in from the left edge as the board is from the right. With four, the player on the
+	/// right sits at the board, their place setting level with the left one, between the middle of
+	/// the table and the board. The deck sits above the board, beside the setting across from you.
+	/// Everything is measured from the three-lane board, so nothing moves with the number of players
+	/// (the board only grows a lane for three).
 	/// </summary>
 	protected override void LayOut(CardTable table)
 	{
-		_board = new Board { Tracks = Players == 4 ? 2 : Players };
+		_board = new Board { Tracks = Players == 3 ? 3 : 2 };
 		AddChild(_board);
+		var reference = new Board { Tracks = 3 };
+		float farEnd = reference.FarEnd, nearEnd = reference.NearEnd, width = reference.Width;
+		reference.Free();
 		// Your place setting the same size as the one across from you, your hands on its ends as theirs are.
 		table.YourMatSize = new Vector2(2.0f, 1.15f);
 		table.YourHandsApart = 0.72f;
@@ -139,14 +143,10 @@ public partial class Main : CardGame
 			return (lo + hi) / 2;
 		}
 		float farEdge = Y(CardTable.FeltFar), nearEdge = Y(CardTable.FeltNear);
-		float boardZ = Solve(z => (Y(z + _board.FarEnd, Board.Thick) - farEdge) - (nearEdge - Y(z + _board.NearEnd, Board.Thick)), 0);
-		_board.Position = new Vector3(1.85f, CardTable.FeltY, boardZ);
-		if (Players == 4)
-		{
-			table.Arrange(Players);
-			return;
-		}
-		float boardTop = Y(boardZ + _board.FarEnd, Board.Thick);
+		float boardZ = Solve(z => (Y(z + farEnd, Board.Thick) - farEdge) - (nearEdge - Y(z + nearEnd, Board.Thick)), 0);
+		const float boardX = 1.85f;
+		_board.Position = new Vector3(boardX, CardTable.FeltY, boardZ);
+		float boardTop = Y(boardZ + farEnd, Board.Thick);
 
 		// Yours, just above the status line (GameHud's: 250 up from the bottom of the screen).
 		table.YourPlace = FeltAt(size.Y - 250 - 6) - table.YourHalfDepth;
@@ -155,18 +155,23 @@ public partial class Main : CardGame
 		const float acrossHalf = 0.575f, sideHalf = 0.875f, sideDepth = 1.0f, sideSeat = -1.78f;
 		float across = FeltAt(boardTop) - acrossHalf;
 		var opposite = new CardTable.Place(new Vector2(0, across - 0.75f), Vector2.Down);
-		if (Players == 2)
+		// The deck: on the right of that setting, above the board.
+		StockAt = new Vector3(1.47f, CardTable.FeltY, across);
+		// On the left: halfway between the setting across from you and yours, the setting under the
+		// seat (so the fan stays on screen).
+		float level = Solve(z => (Y(z - sideHalf) - boardTop) - (yoursTop - Y(z + sideHalf)), 0);
+		float leftMat = -(boardX + width / 2) + sideDepth / 2;
+		var left = new CardTable.Place(new Vector2(sideSeat, level), Vector2.Right, leftMat - sideSeat);
+		// On the right (four players): their setting just in from the board, the seat over it (so the fan is clear of the board).
+		const float rightSeat = 0.8f;
+		float rightMat = boardX - width / 2 - 0.12f - sideDepth / 2;
+		var right = new CardTable.Place(new Vector2(rightSeat, level), Vector2.Left, rightSeat - rightMat);
+		table.Layout = Players switch
 		{
-			table.Layout = new[] { opposite };
-		}
-		else
-		{
-			// On the left: halfway between the setting across from you and yours, the setting under the
-			// seat (so the fan stays on screen).
-			float level = Solve(z => (Y(z - sideHalf) - boardTop) - (yoursTop - Y(z + sideHalf)), 0);
-			float x = -(_board.Position.X + _board.Width / 2) + sideDepth / 2;
-			table.Layout = new[] { new CardTable.Place(new Vector2(sideSeat, level), Vector2.Right, x - sideSeat), opposite };
-		}
+			2 => new[] { opposite },
+			3 => new[] { left, opposite },
+			_ => new[] { left, opposite, right },
+		};
 		table.Arrange(Players);
 	}
 
@@ -280,10 +285,10 @@ public partial class Main : CardGame
 		var top = stock.Take(cutAt).ToList();
 		Say(cutter, "Cut.", dealer);
 		// Top part aside, towards the cutter.
-		var aside = StockAt + new Vector3(0, 0, 0.62f);
+		var aside = StockAt + new Vector3(0.66f, 0, 0);
 		await Hands[cutter].Carry(top.AsEnumerable().Reverse().ToList(), top.AsEnumerable().Reverse().Select((_, i) => Dealer.InStack(aside, i)).ToList(), seconds: 0.35f, lift: 0.2f);
 		// The dealer turns the top of the lower part face up, beside it.
-		var shown = FaceUpAt(StockAt + new Vector3(-0.68f, 0.01f, 0.62f), 0.1f);
+		var shown = FaceUpAt(StockAt + new Vector3(0.33f, 0.01f, -0.78f), 0.1f);
 		await Hands[dealer].Carry(new[] { starter }, new[] { shown }, seconds: 0.4f, lift: 0.3f);
 		News($"The starter is the {Describe(hand.Starter.Value)}.");
 		// The cut goes back on the pack, and the starter on top, face up.
@@ -343,10 +348,8 @@ public partial class Main : CardGame
 	/// <summary>Where a player's cards go in the play: in a row in front of them, towards the middle.</summary>
 	private Vector3 LaySpot(int p, int k)
 	{
-		var toward = Table.Centre - Table.Pile[p];
-		toward.Y = 0;
-		var dir = toward.Normalized();
-		var right = dir.Cross(Vector3.Up).Normalized();
+		var dir = Table.Toward[p];
+		var right = dir.Cross(Vector3.Up);
 		// Players at the sides lay theirs along their own place setting, clear of the middle.
 		float reach = p == 0 || Players == 2 ? 0.95f : Mathf.Abs(dir.X) > 0.9f ? 0.1f : 0.45f;
 		return Table.Pile[p] + dir * reach + right * (-0.36f + k * 0.22f) + Vector3.Up * (CardTable.FeltY + 0.002f * (k + 1));
@@ -354,7 +357,7 @@ public partial class Main : CardGame
 
 	private float Facing(int p)
 	{
-		var toward = Table.Pile[p] - Table.Centre;
+		var toward = -Table.Toward[p];
 		return p == 0 ? 0 : Mathf.Atan2(toward.X, toward.Z);
 	}
 
