@@ -53,7 +53,7 @@ public partial class Main : CardGame
 	private Vector3 CribFor(int dealer)
 	{
 		if (dealer == 0)
-			return new Vector3(-1.65f, CardTable.FeltY, Table.YourPlace - 0.3f);
+			return new Vector3(-(Table.YourMatSize.X / 2 + 0.42f), CardTable.FeltY, Table.YourPlace);
 		var mat = Table.Pile[dealer];
 		var toward = Table.Centre - mat;
 		// Seats face straight across the table: their facing is along one axis.
@@ -64,7 +64,7 @@ public partial class Main : CardGame
 		{
 			if (Mathf.Abs(p.X) > 2.3f || p.X > 1.05f || p.DistanceTo(Table.Centre) < 0.8f || p.DistanceTo(StockAt) < 0.9f)
 				return false;
-			if (Mathf.Abs(p.X) < 2.15f && p.Z > Table.YourPlace - CardTable.YourHalfDepth - 0.4f)
+			if (Mathf.Abs(p.X) < Table.YourMatSize.X / 2 + 0.35f && p.Z > Table.YourPlace - Table.YourHalfDepth - 0.4f)
 				return false; // your place setting
 			for (int s = 1; s < Players; s++)
 				if (s != dealer && p.DistanceTo(Table.Pile[s]) < 1.25f)
@@ -112,6 +112,9 @@ public partial class Main : CardGame
 	{
 		_board = new Board { Tracks = Players == 4 ? 2 : Players };
 		AddChild(_board);
+		// Your place setting the same size as the one across from you, your hands on its ends as theirs are.
+		table.YourMatSize = new Vector2(2.0f, 1.15f);
+		table.YourHandsApart = 0.72f;
 		var camera = table.Camera;
 		var size = GetViewport().GetVisibleRect().Size;
 		float Y(float z, float height = CardTable.FeltY) => camera.UnprojectPosition(new Vector3(0, height, z)).Y;
@@ -139,12 +142,15 @@ public partial class Main : CardGame
 		float boardZ = Solve(z => (Y(z + _board.FarEnd, Board.Thick) - farEdge) - (nearEdge - Y(z + _board.NearEnd, Board.Thick)), 0);
 		_board.Position = new Vector3(1.85f, CardTable.FeltY, boardZ);
 		if (Players == 4)
+		{
+			table.Arrange(Players);
 			return;
+		}
 		float boardTop = Y(boardZ + _board.FarEnd, Board.Thick);
 
 		// Yours, just above the status line (GameHud's: 250 up from the bottom of the screen).
-		table.YourPlace = FeltAt(size.Y - 250 - 6) - CardTable.YourHalfDepth;
-		float yoursTop = Y(table.YourPlace - CardTable.YourHalfDepth);
+		table.YourPlace = FeltAt(size.Y - 250 - 6) - table.YourHalfDepth;
+		float yoursTop = Y(table.YourPlace - table.YourHalfDepth);
 		// Across from you: its near edge in line with the top of the board.
 		const float acrossHalf = 0.575f, sideHalf = 0.875f, sideDepth = 1.0f, sideSeat = -1.78f;
 		float across = FeltAt(boardTop) - acrossHalf;
