@@ -42,8 +42,41 @@ public partial class Main : CardGame
 	/// <summary>The deck sits beside the board, out of the way of the play.</summary>
 	private static Vector3 StockAt => new(1.0f, CardTable.FeltY, 0.75f);
 
-	/// <summary>The crib sits off to the left, clear of everyone's cards.</summary>
-	private static Vector3 CribAt => new(-1.65f, CardTable.FeltY, 0.85f);
+	/// <summary>The crib sits beside the dealer's place setting (it's their extra hand).</summary>
+	private Vector3 CribAt => CribFor(_hand?.Dealer ?? 0);
+
+	/// <summary>
+	/// Beside a seat's place setting: on its right, else in front of it, else on its left, whichever is
+	/// clear of the board, the middle of the table, the deck and the other place settings (failing all
+	/// those, on the far end of its own).
+	/// </summary>
+	private Vector3 CribFor(int dealer)
+	{
+		if (dealer == 0)
+			return new Vector3(-1.65f, CardTable.FeltY, 0.85f);
+		var mat = Table.Pile[dealer];
+		var toward = Table.Centre - mat;
+		// Seats face straight across the table: their facing is along one axis.
+		var f = Mathf.Abs(toward.X) > Mathf.Abs(toward.Z) ? new Vector3(Mathf.Sign(toward.X), 0, 0) : new Vector3(0, 0, Mathf.Sign(toward.Z));
+		var r = f.Cross(Vector3.Up);
+		float half = f.Z == 0 ? 0.875f : 1.0f;
+		bool Clear(Vector3 p)
+		{
+			if (Mathf.Abs(p.X) > 2.3f || p.X > 1.05f || p.DistanceTo(Table.Centre) < 0.8f || p.DistanceTo(StockAt) < 0.9f)
+				return false;
+			if (Mathf.Abs(p.X) < 2.15f && p.Z > 0.2f)
+				return false; // your place setting
+			for (int s = 1; s < Players; s++)
+				if (s != dealer && p.DistanceTo(Table.Pile[s]) < 1.25f)
+					return false;
+			return true;
+		}
+		foreach (var spot in new[] { mat + r * (half + 0.42f), mat + f * 0.95f, mat - r * (half + 0.42f) })
+			if (Clear(spot))
+				return spot;
+		// Crowded (four players, with the board): on the far end of their own place setting.
+		return mat + r * (half - 0.35f);
+	}
 
 	/// <summary>Partners share a name in the score: "you and Max".</summary>
 	private string SideName(int side) => Players == 4 ? (side == 0 ? "You and Max" : "Rosie and Lena") : NameOf(side);
@@ -223,7 +256,7 @@ public partial class Main : CardGame
 			return;
 		}
 		Busy = true;
-		Hud.SetStatus($"{Names[p]}'s turn. The count is {hand.Count}.", Muted);
+		Hud.SetStatus($"{(p == 0 ? "Your" : Names[p] + "'s")} turn. The count is {hand.Count}.", Muted);
 		await Pause(0.7f);
 		if (round != Round)
 			return;
