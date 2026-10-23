@@ -8,10 +8,12 @@ namespace Cribbage.Game;
 /// A pale wooden cribbage board standing lengthways to your right, in the style of the classic
 /// three-track boards: each side has a painted lane (in its player's colour) with a row of holes.
 /// The lanes run side by side up the left (holes 1–35), round the top (36–45), down the right
-/// (46–85), round a turn at the bottom (86–90) and up the middle (91–120) to the game hole marked
-/// FINISH. Numbers mark every five holes; the start holes sit in a box at the bottom left. Thin
-/// lines mark the double skunk (past 60) and the skunk (past 90). Each side has two pegs; to score,
-/// the back peg leaps over the front one to the new total, so the gap always shows the last score.
+/// (46–80), round a turn level with the start (81–85) and up the middle (86–120) to the game hole
+/// marked FINISH. Numbers mark every five holes; the start holes sit in a box at the bottom left.
+/// Thin lines mark the double skunk (past 60) and the skunk (past 90). Each side has two pegs; to
+/// score, the back peg leaps over the front one to the new total, so the gap always shows the last
+/// score. Below the turn, each side has a row of seven holes for the games it has won (to seven:
+/// a skunk counts two, a double skunk three), with a third peg to mark them.
 /// </summary>
 public partial class Board : Node3D
 {
@@ -37,13 +39,13 @@ public partial class Board : Node3D
 
 	/// <summary>The far and near ends of the board, from its position (z).</summary>
 	public float FarEnd => Top - C - 0.22f;
-	public float NearEnd => RightBottom + C / 2 + 0.3f;
+	public float NearEnd => Top + Run(40) + C / 2 + 0.3f; // room below the turn for the games won
 
 	// Where the straight runs start and end, along the board (z; up the board is towards -z).
 	private const float Top = -1.42f;
 	private static float Run(int holes) => holes * Step + (holes - 1) / 5 * GroupGap;
-	private static float RightBottom => Top + Run(40);
-	private float LeftBottom => Top + Run(35);
+	// Both columns end level with the start, where the turn at the bottom is.
+	private static float LeftBottom => Top + Run(35);
 	private float Length => NearEnd - FarEnd;
 	private float Middle => (NearEnd + FarEnd) / 2;
 
@@ -111,7 +113,32 @@ public partial class Board : Node3D
 		Mark(60.5f, new Color("d9a441"));
 		Mark(90.5f, new Color("c9452e"));
 
-		// The pegs, in each side's colour.
+		// The games won, below the turn: a strip in each side's colour with a hole to start from and
+		// seven to fill, under the word GAMES.
+		Text("GAMES", new Vector3(0, Thick, GamesRow(0) - 0.08f), 24, ink);
+		for (int t = 0; t < Tracks; t++)
+		{
+			AddChild(new MeshInstance3D
+			{
+				Mesh = new BoxMesh { Size = new Vector3(GamesHole(t, Games).X - GamesHole(t, 0).X + Lane * 0.9f, 0.001f, Lane * 0.88f) },
+				Position = new Vector3((GamesHole(t, 0).X + GamesHole(t, Games).X) / 2, Thick + 0.0006f, GamesRow(t)),
+				MaterialOverride = new StandardMaterial3D { AlbedoColor = Colours[t] * 0.92f, Roughness = 0.55f },
+				CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+			});
+		}
+		var gameHoles = new MultiMesh { TransformFormat = MultiMesh.TransformFormatEnum.Transform3D, Mesh = mesh, InstanceCount = Tracks * (Games + 1) };
+		for (int t = 0; t < Tracks; t++)
+			for (int g = 0; g <= Games; g++)
+				gameHoles.SetInstanceTransform(t * (Games + 1) + g, new Transform3D(Basis.Identity, GamesHole(t, g) + new Vector3(0, 0.0015f, 0)));
+		AddChild(new MultiMeshInstance3D
+		{
+			Multimesh = gameHoles,
+			MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color("1a0e07"), Roughness = 0.9f },
+			CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+		});
+
+		// The pegs, in each side's colour: two for the score, one for the games.
+		_gamePegs = new MeshInstance3D[Tracks];
 		for (int t = 0; t < Tracks; t++)
 		{
 			var material = new StandardMaterial3D { AlbedoColor = Colours[t], Metallic = 0.6f, Roughness = 0.3f };
@@ -122,6 +149,41 @@ public partial class Board : Node3D
 				_pegs[t, k] = peg;
 				peg.Position = Start(t, k);
 			}
+			_gamePegs[t] = new MeshInstance3D { Mesh = PegMesh(), MaterialOverride = material };
+			AddChild(_gamePegs[t]);
+			_gamePegs[t].Position = GamesHole(t, _games[t]);
+		}
+	}
+
+	/// <summary>Games to win the match.</summary>
+	public const int Games = 7;
+
+	private MeshInstance3D[] _gamePegs = null!;
+	private readonly int[] _games = new int[3];
+
+	/// <summary>How far down the board (z) a side's row of games is: below the turn, one row per side.</summary>
+	private float GamesRow(int track) => LeftBottom + C / 2 + 0.36f + track * (Lane + 0.01f);
+
+	/// <summary>A side's games hole: 0 the one to start from (at the left), then one to seven.</summary>
+	private Vector3 GamesHole(int track, int games) => new(-0.33f + games * 0.095f, Thick + 0.001f, GamesRow(track));
+
+	/// <summary>Moves a side's games peg on to how many games it has won (up to seven).</summary>
+	public Tween? MarkGames(int track, int games)
+	{
+		_games[track] = Mathf.Clamp(games, 0, Games);
+		if (_gamePegs == null)
+			return null;
+		return CardMotion.Fly(_gamePegs[track], new Transform3D(Basis.Identity, ToGlobal(GamesHole(track, _games[track]))), 0.5f, lift: 0.22f);
+	}
+
+	/// <summary>Every games peg back to its start (a new match).</summary>
+	public void ResetGames()
+	{
+		for (int t = 0; t < Tracks; t++)
+		{
+			_games[t] = 0;
+			if (_gamePegs != null)
+				_gamePegs[t].Position = GamesHole(t, 0);
 		}
 	}
 
@@ -147,22 +209,22 @@ public partial class Board : Node3D
 			var radial = new Vector3(Mathf.Cos(a), 0, -Mathf.Sin(a));
 			return (centre + radial * C, new Vector3(Mathf.Sin(a), 0, Mathf.Cos(a)), radial);
 		}
-		if (n <= 85)
+		if (n <= 80)
 		{
 			// Down the right column.
 			float z = Top + Offset(n - 46) + 0.03f;
 			return (Up(C, z), Vector3.Back, Vector3.Right);
 		}
-		if (n <= 90)
+		if (n <= 85)
 		{
 			// Round the turn at the bottom, from the right column to the middle.
-			float a = (n - 85.5f) / 5f * Mathf.Pi;
-			var centre = Up(C / 2, RightBottom + 0.06f);
+			float a = (n - 80.5f) / 5f * Mathf.Pi;
+			var centre = Up(C / 2, LeftBottom + 0.06f);
 			var radial = new Vector3(Mathf.Cos(a), 0, Mathf.Sin(a));
 			return (centre + radial * (C / 2), new Vector3(-Mathf.Sin(a), 0, Mathf.Cos(a)), radial);
 		}
 		// Up the middle to the finish.
-		float zm = RightBottom + 0.06f - Offset(n - 91) - 0.04f;
+		float zm = LeftBottom + 0.06f - Offset(n - 86) - 0.04f;
 		return (Up(0, zm), Vector3.Forward, Vector3.Right);
 	}
 

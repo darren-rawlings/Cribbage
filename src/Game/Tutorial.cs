@@ -15,6 +15,6 @@ public static class Tutorial
 		new TutorialPage("The show",
 			"Each hand is counted with the starter: 2 for every fifteen, 2 for every pair, a point a card for runs, 4 for a flush, and 1 for the jack of the starter's suit. Then the dealer counts the crib. A hand worth nothing is called \"nineteen\" (you can't make 19)."),
 		new TutorialPage("The board",
-			"Every point moves your pegs along the board on your right: up the first column, down the second, up the third, the back peg leaping over the front one. First to 121 wins; win before the others pass the skunk line (90) and it's a skunk, or past the double-skunk line (60), a double skunk!"),
+			"Every point moves your pegs along the board on your right: up the first column, down the second, up the third, the back peg leaping over the front one. First to 121 wins the game, and moves their peg along the GAMES row at the bottom: a skunk (winning before the others pass the skunk line, 90) counts two games, and a double skunk (before the double-skunk line, 60) three. First to seven games wins the match!"),
 	};
 }

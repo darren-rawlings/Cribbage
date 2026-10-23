@@ -139,6 +139,13 @@ public partial class Main : CardGame
 		{
 			_game = new CribbageGame(Players);
 			_board.Reset();
+			if (_games.Max() >= Board.Games)
+			{
+				// The match is over: a new one.
+				Array.Clear(_games);
+				_board.ResetGames();
+			}
+			SetScore();
 		}
 		MakeAis(Settings.Difficulty);
 		_nodes.Clear();
@@ -406,11 +413,19 @@ public partial class Main : CardGame
 		{
 			int w = _game.Winner;
 			Sparkle.Burst(this, _board.ToGlobal(_board.Hole(w, 121)) + Vector3.Up * 0.2f);
-			string skunk = _game.DoubleSkunk ? " A double skunk!" : _game.Skunk ? " A skunk!" : "";
+			// The games won: a skunk counts two, a double skunk three; the first to seven wins the match.
+			int points = _game.DoubleSkunk ? 3 : _game.Skunk ? 2 : 1;
+			_games[w] = Math.Min(Board.Games, _games[w] + points);
+			_board.MarkGames(w, _games[w]);
+			SetScore();
+			string skunk = _game.DoubleSkunk ? " A double skunk: three games!" : _game.Skunk ? " A skunk: two games!" : "";
 			int runnerUp = _game.Scores.Where((_, i) => i != w).Max();
 			bool us = w == 0;
 			string who = SideName(w);
-			Finish(us ? $"{who} peg out and win, 121 to {runnerUp}!{skunk}" : $"{who} {(Players == 4 ? "peg" : "pegs")} out and {(Players == 4 ? "win" : "wins")}, 121 to {runnerUp}.{skunk}",
+			string match = _games[w] >= Board.Games
+				? $" That's {Board.Games} games: {(us ? "you win" : $"{who} {(Players == 4 ? "win" : "wins")}")} the match!"
+				: $" Games: {GamesLine()}.";
+			Finish((us ? $"{who} peg out and win, 121 to {runnerUp}!{skunk}" : $"{who} {(Players == 4 ? "peg" : "pegs")} out and {(Players == 4 ? "win" : "wins")}, 121 to {runnerUp}.{skunk}") + match,
 				us ? 0 : 1, _game.Skunk ? hand.Kept(w).Select(c => _nodes[c]) : null);
 		}
 		else
@@ -428,8 +443,14 @@ public partial class Main : CardGame
 		string line = Players == 4
 			? $"To 121: us {scores[0]} · them {scores[1]}"
 			: $"To 121: {string.Join(" · ", Enumerable.Range(0, Players).Select(s => $"{(s == 0 ? "you" : Names[s])} {scores[s]}"))}";
-		Hud.SetScore($"{line}   ·   Wins {Wins.First}–{Wins.Second}");
+		Hud.SetScore($"{line}   ·   Games {string.Join("–", _games.Take(scores.Length))}");
 	}
+
+	/// <summary>Games won by each side this match (to <see cref="Board.Games"/>), marked on the board.</summary>
+	private readonly int[] _games = new int[3];
+
+	/// <summary>The games so far, side by side: "you 2, Rosie 1".</summary>
+	private string GamesLine() => string.Join(", ", Enumerable.Range(0, _game.Scores.Length).Select(s => $"{(Players == 4 ? (s == 0 ? "you" : "them") : s == 0 ? "you" : Names[s])} {_games[s]}"));
 
 	private static string Describe(Card card) => $"{Card.RankName(card.Rank).ToLowerInvariant()} of {card.Suit.ToString().ToLowerInvariant()}";
 
