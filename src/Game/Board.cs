@@ -171,14 +171,14 @@ public partial class Board : Node3D
 		if (score <= 0)
 			return Start(track, 0);
 		if (score >= 121)
-			return Path(120).At + new Vector3(LaneOffset(track), 0.001f, -0.13f);
+			return Hole(track, 120) + Vector3.Forward * 0.13f; // straight on up its own lane
 		var (at, along, _) = Path(score);
 		var side = along.Cross(Vector3.Up).Normalized();
 		return at - side * LaneOffset(track) + Vector3.Up * 0.001f;
 	}
 
 	/// <summary>The two start holes for a lane, in the box below the first column.</summary>
-	private Vector3 Start(int track, int k) => new(-C + LaneOffset(track), Thick + 0.001f, LeftBottom + 0.1f + k * 0.07f);
+	private Vector3 Start(int track, int k) => Hole(track, 1) with { Z = LeftBottom + 0.1f + k * 0.07f };
 
 	/// <summary>A lane's painted strip, from the start box to the finish.</summary>
 	private Mesh Strip(int track)
