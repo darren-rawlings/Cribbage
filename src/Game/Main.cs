@@ -104,9 +104,9 @@ public partial class Main : CardGame
 	/// The board stands lengthways down the right of the table, as far below the far edge of the felt
 	/// as above the near edge, as they look on screen. With two or three players it takes the
 	/// right-hand seat and the table is set round it, by eye: your place setting sits just above the
-	/// status line, the one across from you is pushed up until the board reaches as far beside it
-	/// as beside yours, and a player on the left has theirs level with the board's middle and as far
-	/// in from the left edge as the board is from the right. (Four players keep the usual seats.)
+	/// status line, the one across from you has its near edge in line with the top of the board, and
+	/// a player on the left has theirs halfway between those two and as far in from the left edge as
+	/// the board is from the right. (Four players keep the usual seats.)
 	/// </summary>
 	protected override void LayOut(CardTable table)
 	{
@@ -140,14 +140,14 @@ public partial class Main : CardGame
 		_board.Position = new Vector3(1.85f, CardTable.FeltY, boardZ);
 		if (Players == 4)
 			return;
-		float boardTop = Y(boardZ + _board.FarEnd, Board.Thick), boardBottom = Y(boardZ + _board.NearEnd, Board.Thick);
+		float boardTop = Y(boardZ + _board.FarEnd, Board.Thick);
 
 		// Yours, just above the status line (GameHud's: 250 up from the bottom of the screen).
 		table.YourPlace = FeltAt(size.Y - 250 - 6) - CardTable.YourHalfDepth;
-		float overlap = boardBottom - Y(table.YourPlace - CardTable.YourHalfDepth);
-		// Across from you: its near edge as far below the board's top as the board's bottom is below your far edge.
+		float yoursTop = Y(table.YourPlace - CardTable.YourHalfDepth);
+		// Across from you: its near edge in line with the top of the board.
 		const float acrossHalf = 0.575f, sideHalf = 0.875f, sideDepth = 1.0f, sideSeat = -1.78f;
-		float across = FeltAt(boardTop + overlap) - acrossHalf;
+		float across = FeltAt(boardTop) - acrossHalf;
 		var opposite = new CardTable.Place(new Vector2(0, across - 0.75f), Vector2.Down);
 		if (Players == 2)
 		{
@@ -155,8 +155,9 @@ public partial class Main : CardGame
 		}
 		else
 		{
-			// On the left: level with the board, the setting under the seat (the fan stays on screen).
-			float level = Solve(z => (Y(z - sideHalf) + Y(z + sideHalf)) / 2, (boardTop + boardBottom) / 2);
+			// On the left: halfway between the setting across from you and yours, the setting under the
+			// seat (so the fan stays on screen).
+			float level = Solve(z => (Y(z - sideHalf) - boardTop) - (yoursTop - Y(z + sideHalf)), 0);
 			float x = -(_board.Position.X + _board.Width / 2) + sideDepth / 2;
 			table.Layout = new[] { new CardTable.Place(new Vector2(sideSeat, level), Vector2.Right, x - sideSeat), opposite };
 		}
