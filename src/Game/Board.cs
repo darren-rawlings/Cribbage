@@ -167,12 +167,17 @@ public partial class Board : Node3D
 	/// <summary>A side's games hole: 0 the one to start from (at the left), then one to seven.</summary>
 	private Vector3 GamesHole(int track, int games) => new(-0.33f + games * 0.095f, Thick + 0.001f, GamesRow(track));
 
-	/// <summary>Moves a side's games peg on to how many games it has won (up to seven).</summary>
-	public Tween? MarkGames(int track, int games)
+	/// <summary>Moves a side's games peg on to how many games it has won (up to seven), or puts it straight there.</summary>
+	public Tween? MarkGames(int track, int games, bool instant = false)
 	{
 		_games[track] = Mathf.Clamp(games, 0, Games);
 		if (_gamePegs == null)
 			return null;
+		if (instant)
+		{
+			_gamePegs[track].Position = GamesHole(track, _games[track]);
+			return null;
+		}
 		return CardMotion.Fly(_gamePegs[track], new Transform3D(Basis.Identity, ToGlobal(GamesHole(track, _games[track]))), 0.5f, lift: 0.22f);
 	}
 

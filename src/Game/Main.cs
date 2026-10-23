@@ -109,6 +109,13 @@ public partial class Main : CardGame
 	{
 		_board = new Board { Tracks = Players == 3 ? 3 : 2 };
 		AddChild(_board);
+		// The match so far (it carries over between launches).
+		var saved = SavedMatch(_board.Tracks);
+		for (int t = 0; t < saved.Length; t++)
+		{
+			_games[t] = Math.Min(Board.Games, saved[t]);
+			_board.MarkGames(t, _games[t], instant: true);
+		}
 		// The strip is the three-lane board's.
 		var reference = new Board { Tracks = 3 };
 		float farEnd = reference.FarEnd, width = reference.Width;
@@ -144,6 +151,7 @@ public partial class Main : CardGame
 				// The match is over: a new one.
 				Array.Clear(_games);
 				_board.ResetGames();
+				SaveMatch(_games.Take(_board.Tracks));
 			}
 			SetScore();
 		}
@@ -417,6 +425,7 @@ public partial class Main : CardGame
 			int points = _game.DoubleSkunk ? 3 : _game.Skunk ? 2 : 1;
 			_games[w] = Math.Min(Board.Games, _games[w] + points);
 			_board.MarkGames(w, _games[w]);
+			SaveMatch(_games.Take(_board.Tracks));
 			SetScore();
 			string skunk = _game.DoubleSkunk ? " A double skunk: three games!" : _game.Skunk ? " A skunk: two games!" : "";
 			int runnerUp = _game.Scores.Where((_, i) => i != w).Max();
