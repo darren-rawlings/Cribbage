@@ -104,7 +104,7 @@ public partial class Board : Node3D
 		for (int n = 5; n <= 120; n += 5)
 		{
 			var (at, _, outward) = Path(n);
-			Text(n.ToString(), at + outward * (Tracks * Lane / 2 + 0.065f), 30, ink);
+			Text(n.ToString(), at + outward * (Tracks * Lane / 2 + 0.055f), 24, ink);
 		}
 		Text("START", new Vector3(-C, Thick, LeftBottom + 0.36f), 26, ink);
 		Text("FINISH", Hole(0, 121) + new Vector3(0, 0, -0.1f) with { X = 0 }, 26, ink);

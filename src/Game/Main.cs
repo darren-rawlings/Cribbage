@@ -16,7 +16,7 @@ namespace Cribbage.Game;
 /// to 121 on a wooden board standing to your right. Tap your card (or two) and press "To the
 /// crib"; the player on the dealer's right cuts the deck and the dealer turns the starter. In the
 /// play, tap a card to lay it (cards that would pass 31 are greyed). At the show, each hand is
-/// counted aloud and pegged; a hand worth nothing ("nineteen") spins a 19.
+/// counted aloud and pegged; a hand worth nothing ("nineteen") spins a bronze 19, and a 28 or 29 a silver or gold medal.
 /// </summary>
 public partial class Main : CardGame
 {
@@ -102,8 +102,10 @@ public partial class Main : CardGame
 	/// The table is set by eye like every card game's (<see cref="CardTable.SetByEye"/>), with the
 	/// board standing lengthways in the strip down the right, so three players sit left and across
 	/// from you, and with four the player on the right has their place setting just in from the
-	/// board. The deck sits above the board, beside the setting across from you. Nothing moves with
-	/// the number of players (the board only grows a lane for three).
+	/// board. The deck sits on your right, directly under the board and level with your setting,
+	/// where the card cut for the starter is easy to read: the board (and the far settings lined up
+	/// with its top) moves up the table just enough to make room. Nothing moves with the number of
+	/// players (the board only grows a lane for three).
 	/// </summary>
 	protected override void LayOut(CardTable table)
 	{
@@ -118,27 +120,36 @@ public partial class Main : CardGame
 		}
 		// The strip is the three-lane board's.
 		var reference = new Board { Tracks = 3 };
-		float farEnd = reference.FarEnd, width = reference.Width;
+		float farEnd = reference.FarEnd, nearEnd = reference.NearEnd, width = reference.Width;
 		reference.Free();
 		const float boardX = CardTable.FeltHalfWidth - CardTable.SideMargin - 0.584f;
 		float? inner = Players == 4 ? boardX - width / 2 - 0.12f - 0.5f : null;
 		table.SetByEye(Players, StatusTop, rightAt: inner, acrossAtThree: true);
-		_board.Position = new Vector3(boardX, CardTable.FeltY, table.StripFar() - farEnd);
-		// The deck: on the right of the setting across from you, above the board.
-		StockAt = new Vector3(1.47f, CardTable.FeltY, table.Pile[Players == 2 ? 1 : 2].Z);
+		// The deck, level with your place setting; the board up out of its way (a little gap between).
+		StockAt = new Vector3(boardX, CardTable.FeltY, table.YourPlace);
+		float up = Mathf.Max(0, table.StripFar() - farEnd + nearEnd + 0.06f - (StockAt.Z - Card3D.Height / 2));
+		table.SetByEye(Players, StatusTop, rightAt: inner, acrossAtThree: true, stripUp: up);
+		_board.Position = new Vector3(boardX, CardTable.FeltY, table.StripFar() - up - farEnd);
 	}
 
-	/// <summary>`--nineteen` shows the 19 popup first thing, for checks.</summary>
-	protected override void DevArg(string name, string value) => _nineteenCheck |= name == "--nineteen";
+	/// <summary>`--medal=19` (or 28, 29) shows that medal first thing, for checks (`--nineteen` too).</summary>
+	protected override void DevArg(string name, string value)
+	{
+		if (name == "--nineteen")
+			_medalCheck = 19;
+		else if (name == "--medal" && int.TryParse(value, out int points))
+			_medalCheck = points;
+	}
 
-	private bool _nineteenCheck;
+	private int _medalCheck;
 
 	protected override async Task NewRound()
 	{
-		if (_nineteenCheck)
+		if (_medalCheck > 0)
 		{
-			_nineteenCheck = false;
-			await ShowNineteen("Rosie's hand: nineteen!");
+			int points = _medalCheck;
+			_medalCheck = 0;
+			await ShowMedal(points, $"Rosie's hand: {(points == 19 ? "nineteen" : points.ToString())}!");
 		}
 		int round = Round;
 		_crib.Visible = false;
@@ -245,11 +256,11 @@ public partial class Main : CardGame
 		var stock = hand.Stock.Select(c => _nodes[c]).ToList(); // top first
 		var top = stock.Take(cutAt).ToList();
 		Say(cutter, "Cut.", dealer);
-		// Top part aside, towards the cutter.
-		var aside = StockAt + new Vector3(0.66f, 0, 0);
+		// Top part aside, to the left (the board is above the pack).
+		var aside = StockAt + new Vector3(-0.66f, 0, 0);
 		await Hands[cutter].Carry(top.AsEnumerable().Reverse().ToList(), top.AsEnumerable().Reverse().Select((_, i) => Dealer.InStack(aside, i)).ToList(), seconds: 0.35f, lift: 0.2f);
-		// The dealer turns the top of the lower part face up, beside it.
-		var shown = FaceUpAt(StockAt + new Vector3(0.33f, 0.01f, -0.78f), 0.1f);
+		// The dealer turns the top of the lower part face up, onto the cut beside it.
+		var shown = FaceUpAt(aside + Vector3.Up * (Dealer.CardThickness * (top.Count + 2)), 0.1f);
 		await Hands[dealer].Carry(new[] { starter }, new[] { shown }, seconds: 0.4f, lift: 0.3f);
 		News($"The starter is the {Describe(hand.Starter.Value)}.");
 		// The cut goes back on the pack, and the starter on top, face up.
@@ -309,8 +320,10 @@ public partial class Main : CardGame
 	/// <summary>Where a player's cards go in the play: in a row in front of them, towards the middle.</summary>
 	private Vector3 LaySpot(int p, int k)
 	{
+		// Yours: above your fan, centred on the open middle of the table (with four, clear of the
+		// right-hand setting).
 		if (p == 0)
-			return new Vector3(-0.36f + k * 0.22f, CardTable.FeltY + 0.002f * (k + 1), Table.YourPlayZ);
+			return new Vector3(Table.Centre.X - 0.36f + k * 0.22f, CardTable.FeltY + 0.002f * (k + 1), Table.YourPlayZ);
 		var dir = Table.Toward[p];
 		var right = dir.Cross(Vector3.Up);
 		// Players at the sides lay theirs along their own place setting, clear of the middle, spread
@@ -394,7 +407,7 @@ public partial class Main : CardGame
 			{
 				Hud.SetStatus($"{whose}: nineteen (nothing).", Bright);
 				Say(player, what == "crib" ? "Nineteen in the crib!" : "Nineteen!");
-				await ShowNineteen($"{whose}: nineteen!");
+				await ShowMedal(19, $"{whose}: nineteen!");
 			}
 			else
 			{
@@ -402,6 +415,9 @@ public partial class Main : CardGame
 				// Give the count time to be read before it's pegged.
 				await Pause(0.35f * phrases.Count);
 				Hud.SetStatus($"{whose}: {points}.", Bright);
+				// The best hands there are: a silver 28, a gold 29.
+				if (points is 28 or 29)
+					await ShowMedal(points, $"{whose}: {points}!");
 			}
 			await Await(_board.Peg(hand.Side(player), hand.ScoreOf(player)));
 			SetScore();
@@ -414,10 +430,10 @@ public partial class Main : CardGame
 
 	private Vector3 LaySpot(int p, float k) => LaySpot(p, (int)k) + (LaySpot(p, (int)k + 1) - LaySpot(p, (int)k)) * (k - (int)k);
 
-	/// <summary>The 19 moment: the screen dims and the 19 spins and glows until you tap it (in the demo, a few seconds).</summary>
-	private async Task ShowNineteen(string caption)
+	/// <summary>A medal moment (bronze 19, silver 28, gold 29): the screen dims and it spins and glows until you tap it (in the demo, a few seconds).</summary>
+	private async Task ShowMedal(int points, string caption)
 	{
-		var popup = new Nineteen(caption);
+		var popup = new Medal(points, caption);
 		Hud.AddChild(popup);
 		if (Demo)
 			GetTree().CreateTimer(2.5f).Timeout += popup.Close;
@@ -447,7 +463,7 @@ public partial class Main : CardGame
 				? $" That's {Board.Games} games: {(us ? "you win" : $"{who} {(Players == 4 ? "win" : "wins")}")} the match!"
 				: $" Games: {GamesLine()}.";
 			Finish((us ? $"{who} peg out and win, 121 to {runnerUp}!{skunk}" : $"{who} {(Players == 4 ? "peg" : "pegs")} out and {(Players == 4 ? "win" : "wins")}, 121 to {runnerUp}.{skunk}") + match,
-				us ? 0 : 1, _game.Skunk ? hand.Kept(w).Select(c => _nodes[c]) : null);
+				us ? 0 : 1, _game.Skunk ? hand.Kept(w).Select(c => _nodes[c]) : null, winningSeats: Players == 4 ? new[] { w, w + 2 } : new[] { w });
 		}
 		else
 		{
