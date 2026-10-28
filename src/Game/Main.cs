@@ -143,8 +143,13 @@ public partial class Main : CardGame
 
 	private int _medalCheck;
 
+	/// <summary>The medal clip shows a nineteen first thing.</summary>
+	private bool MedalClip => ClipName == "medal";
+
 	protected override async Task NewRound()
 	{
+		if (MedalClip && Round == 0)
+			_medalCheck = 19;
 		if (_medalCheck > 0)
 		{
 			int points = _medalCheck;
@@ -215,6 +220,7 @@ public partial class Main : CardGame
 
 	private async Task Discard(IReadOnlyList<Card> mine)
 	{
+		ClipMoment("crib", 6);
 		var hand = _hand!;
 		Busy = true;
 		_crib.Visible = false;
@@ -342,6 +348,7 @@ public partial class Main : CardGame
 
 	private async Task Lay(int p, Card card)
 	{
+		ClipMoment("pegging", 9);
 		var hand = _hand!;
 		Busy = true;
 		DimUnplayable(null);
@@ -377,6 +384,7 @@ public partial class Main : CardGame
 
 	private async Task Show()
 	{
+		ClipMoment("show", 10);
 		var hand = _hand!;
 		ShowTurn(-1);
 		var shows = hand.Show();
@@ -433,6 +441,7 @@ public partial class Main : CardGame
 	/// <summary>A medal moment (bronze 19, silver 28, gold 29): the screen dims and it spins and glows until you tap it (in the demo, a few seconds).</summary>
 	private async Task ShowMedal(int points, string caption)
 	{
+		ClipMoment("medal", 4);
 		var popup = new Medal(points, caption);
 		Hud.AddChild(popup);
 		if (Demo)
